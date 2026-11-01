@@ -21,7 +21,7 @@ cp sample.env .env      # edit the values
 docker compose up -d --build
 ```
 
-The gateway listens on port `7435`. Put a reverse proxy that terminates HTTPS (nginx, Caddy etc.) in front of it; the application honours the `X-Forwarded-*` headers.
+The gateway listens on port `7435`. Put a reverse proxy that terminates HTTPS (nginx, Caddy etc.) in front of it; `X-Forwarded-*` headers are honoured only from the addresses in `TRUSTED_PROXIES`. `docker-compose.yml` publishes the port on `127.0.0.1` only; set `BIND_ADDRESS` to change that.
 
 Cockpit must be installed and running on the target servers:
 
@@ -43,33 +43,35 @@ sudo ufw allow from GATEWAY_IP to any port 9090 proto tcp
 
 | Variable | Description |
 | --- | --- |
-| `SECRET_KEY` | Signs session cookies and encrypts Cockpit passwords. Must be long and random. **If it changes, stored Cockpit passwords can no longer be decrypted.** |
+| `SECRET_KEY` | Signs session cookies and encrypts Cockpit passwords. If empty or a sample value, a random one is generated once and kept in `data/.secret_key`. **If it changes, stored Cockpit passwords can no longer be decrypted.** |
 | `PORT` | Port to listen on (default `7435`) |
 | `PUBLIC_URL` | The address the gateway is reached at from outside, e.g. `https://mcp.example.com`. OAuth redirects use it. |
 | `COCKPIT_AUTH_URL` | The Cockpit that verifies logins. Default `https://host.docker.internal:9090` (the host machine the gateway runs on). |
 | `COCKPIT_AUTH_VERIFY_TLS` | Whether to verify this Cockpit's certificate (default `false`) |
-| `ALLOWED_USERS` | Cockpit users allowed into the gateway (comma separated). **If left empty, every user who can log in to Cockpit on that machine is allowed.** |
-| `MCP_API_KEY` | **Access token** required in addition to the Cockpit login (second factor). Must be long and random. If empty, the Cockpit login alone is enough. Changing it ends all sessions. |
+| `ALLOWED_USERS` | Cockpit users allowed into the gateway (comma separated). **Required: the gateway does not start if it is empty.** |
+| `MCP_API_KEY` | **Access token** required in addition to the Cockpit login (second factor). If empty or a sample value, a random one is generated once and kept in `data/.mcp_api_key`. Changing it ends all panel and OAuth sessions. |
 | `OUTBOUND_PROXY` | Optional. Default proxy for connections to the servers (`socks5://`, `socks5h://`, `http://`). See *Connection proxy*. |
-| `SSH_LOGINS` | Users and key folders to try for SSH connections (tunnel and fallback). Default: `root:/root/.ssh,bmericc:/home/bmericc/.ssh` |
+| `SSH_LOGINS` | Users and key folders to try for SSH connections (tunnel and fallback). Default: `root:/root/.ssh` |
+| `TRUSTED_PROXIES` | Reverse proxy addresses allowed to set `X-Forwarded-*` (comma separated, CIDR allowed). Default `127.0.0.1`. With a proxy on the host and the compose network, use the bridge range, e.g. `172.16.0.0/12`. Never use `*`: clients could then forge the address in the audit log. |
+| `MCP_READ_ONLY` | `true` disables every tool that changes something (default `false`). The `confirm` field is filled in by the model, so it is not human approval; this switch is. |
 | `AUDIT_LOG_MAX_MB` | Maximum size of the audit log file (default `10`). See *Audit log*. |
 
-`docker-compose.yml` gives access to the host machine under the name `host.docker.internal`. It also mounts the `/root/.ssh` and `/home/bmericc/.ssh` folders read-only.
+`docker-compose.yml` gives access to the host machine under the name `host.docker.internal`. It also mounts `/root/.ssh` read-only. To use another user's keys, add the folder in a `docker-compose.override.yml` and to `SSH_LOGINS`. The file also drops Linux capabilities and makes the container filesystem read-only.
 
 ## Logging in and connecting an MCP client
 
-MCP endpoint: `https://<PUBLIC_URL>/sse`
+MCP endpoint: `https://<PUBLIC_URL>/mcp` (Streamable HTTP). The HTTP+SSE transport, deprecated in the MCP specification, stays available at `https://<PUBLIC_URL>/sse` for older clients.
 
-The login has two parts: the **Cockpit username/password** and, if `MCP_API_KEY` is set, the **access token**. The token alone does not grant access. This way a weak Cockpit password is not enough on its own.
+The login has two parts: the **Cockpit username/password** and the **access token** (`MCP_API_KEY`). The token alone does not grant access. This way a weak Cockpit password is not enough on its own.
 
 | Method | Usage |
 | --- | --- |
-| **OAuth 2.1** (recommended) | When the client connects, a login page opens in the browser: username, Cockpit password and gateway password (`MCP_API_KEY`). After login the client receives a token (1 hour; refresh token 30 days). |
+| **OAuth 2.1** (recommended) | When the client connects, a login page opens in the browser: username, Cockpit password and gateway password (`MCP_API_KEY`). After login the client receives a token (1 hour; renewals stop 7 days after the login, then the client has to log in with Cockpit again). |
 | **HTTP Basic** | `Authorization: Basic base64(user:password)` + the access token (`X-MCP-Token: <token>` header or `?token=<token>`) |
 
-If the gateway password is added to the MCP address (`https://<PUBLIC_URL>/sse?token=<MCP_API_KEY>`), the login page does not ask for it again; only the username and Cockpit password are requested. If it is missing or wrong, a second password field appears on the page. The same applies to the web panel (`/login?token=<token>`).
+If the gateway password is added to the MCP address (`https://<PUBLIC_URL>/mcp?token=<MCP_API_KEY>`), the login page does not ask for it again; only the username and Cockpit password are requested. If it is missing or wrong, a second password field appears on the page. The same applies to the web panel (`/login?token=<token>`).
 
-**claude.ai:** Enter `https://<PUBLIC_URL>/sse?token=<token>` under *Settings → Connectors → Add custom connector*. Log in with your Cockpit account on the page that opens while connecting.
+**claude.ai:** Enter `https://<PUBLIC_URL>/mcp?token=<token>` under *Settings → Connectors → Add custom connector*. Log in with your Cockpit account on the page that opens while connecting.
 
 **Claude Code:**
 
@@ -206,17 +208,19 @@ python -m pytest
 
 ## Security notes
 
-- Always set `ALLOWED_USERS`. The gateway can perform operations with administrator privileges on the registered servers.
-- Choose a long and random `MCP_API_KEY` (e.g. `openssl rand -hex 32`). Even if the Cockpit password is weak, nobody can log in without the token. If the token is wrong, the password is never sent to Cockpit.
-- TLS verification is off by default for Cockpit connections (for self-signed certificates); it is never verified for the Cockpit connection inside the SSH tunnel. The server key is not verified for SSH (`known_hosts=None`). These assume a trusted network.
-- Keep `SECRET_KEY` secret and do not change it.
+- The gateway can perform operations with administrator privileges on the registered servers. Keep `ALLOWED_USERS` short and consider `MCP_READ_ONLY=true` where changes are not needed.
+- Even if the Cockpit password is weak, nobody can log in without `MCP_API_KEY`. If the token is wrong, the password is never sent to Cockpit. After 10 failed attempts an IP address is blocked for 5 minutes.
+- A token in the URL is hidden in the gateway's access log, but your reverse proxy logs it too. Prefer entering it on the login page, or mask `token=` in the proxy's log format.
+- Panel sessions last 8 hours, are revoked on the server at logout and end when the gateway restarts. An open SSE connection is re-checked every 30 seconds; Streamable HTTP checks every request.
+- TLS verification is off by default for Cockpit connections (for self-signed certificates); it is never verified for the Cockpit connection inside the SSH tunnel. For SSH, the server key is stored on first connection and any change is refused until *Forget host key* is used in the panel, so the very first connection has to be trusted.
+- Keep `SECRET_KEY` and the `data/` folder secret, and do not change `SECRET_KEY`.
+- `servers.json` is never treated as empty when it cannot be read: the gateway reports an error instead of overwriting it.
 
 ## Components
 
 | Folder | Description |
 | --- | --- |
 | `public-gateway/` | MCP server, OAuth authorization, web panel, Cockpit and SSH clients |
-| `internal-agent/` | An agent planned to connect to the gateway over WebSocket. **Not used yet.** |
 
 ## License
 

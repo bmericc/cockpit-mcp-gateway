@@ -1,6 +1,7 @@
 """Cockpit hesabıyla giriş: web paneli, HTTP Basic ve MCP OAuth akışı."""
 import base64
 import hashlib
+import os
 import secrets
 from urllib.parse import parse_qs, urlparse
 
@@ -8,7 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import auth
+import access
 import main
+import mcp_gateway
+import settings
 from creds import PASSWORD, WRONG_PASSWORD
 
 
@@ -17,17 +21,17 @@ def cockpit(monkeypatch):
     from fake_cockpit import LiveFakeCockpit
 
     live = LiveFakeCockpit().start()
-    monkeypatch.setattr(main.authenticator, "url", live.url)
-    monkeypatch.setattr(main.authenticator, "allowed_users", set())
-    monkeypatch.setattr(main.authenticator, "_basic_cache", {})
+    monkeypatch.setattr(access.authenticator, "url", live.url)
+    monkeypatch.setattr(access.authenticator, "allowed_users", {"admin", "plain"})
+    monkeypatch.setattr(access.authenticator, "_basic_cache", {})
     yield live
     live.stop()
 
 
 @pytest.fixture
 def provider(tmp_path, monkeypatch):
-    """SDK route'ları main.oauth_provider nesnesini tutar; nesneyi değiştirmek yerine durumunu sıfırla."""
-    p = main.oauth_provider
+    """SDK route'ları access.oauth_provider nesnesini tutar; nesneyi değiştirmek yerine durumunu sıfırla."""
+    p = access.oauth_provider
     monkeypatch.setattr(p, "store_path", str(tmp_path / "oauth.json"))
     for attr in ("clients", "access_tokens", "refresh_tokens", "codes", "pending"):
         monkeypatch.setattr(p, attr, {})
@@ -60,14 +64,14 @@ def test_web_login_wrong_password(cockpit, servers_file):
 
 
 def test_web_login_cockpit_unreachable(monkeypatch, servers_file):
-    monkeypatch.setattr(main.authenticator, "url", "http://127.0.0.1:1")
+    monkeypatch.setattr(access.authenticator, "url", "http://127.0.0.1:1")
     resp = TestClient(main.app).post("/login", data={"username": "admin", "password": PASSWORD})
     assert resp.status_code == 401
     assert "Could not reach Cockpit" in resp.text
 
 
 def test_web_login_respects_allowed_users(cockpit, monkeypatch, servers_file):
-    monkeypatch.setattr(main.authenticator, "allowed_users", {"plain"})
+    monkeypatch.setattr(access.authenticator, "allowed_users", {"plain"})
     resp = TestClient(main.app).post("/login", data={"username": "admin", "password": PASSWORD})
     assert resp.status_code == 401
     assert "not allowed to access the gateway" in resp.text
@@ -78,7 +82,7 @@ def test_web_login_respects_allowed_users(cockpit, monkeypatch, servers_file):
 def test_sse_401_points_to_oauth_metadata():
     resp = TestClient(main.app).get("/sse")
     assert resp.status_code == 401
-    assert f'resource_metadata="{main.RESOURCE_METADATA_URL}"' in resp.headers["www-authenticate"]
+    assert f'resource_metadata="{f"{settings.PUBLIC_URL}{mcp_gateway.METADATA_PATH}/sse"}"' in resp.headers["www-authenticate"]
 
 
 @pytest.mark.anyio
@@ -88,24 +92,24 @@ async def test_authenticate_basic(cockpit):
     def request(header):
         return Request({"type": "http", "headers": [(b"authorization", header.encode())], "query_string": b""})
 
-    assert await main.authenticate_mcp(request(basic("admin", PASSWORD))) == "admin"
-    assert await main.authenticate_mcp(request(basic("admin", WRONG_PASSWORD))) is None
+    assert await access.authenticate_mcp(request(basic("admin", PASSWORD))) == "admin"
+    assert await access.authenticate_mcp(request(basic("admin", WRONG_PASSWORD))) is None
     logins = len(cockpit.fake.logins)
     # Başarılı giriş kısa süre önbelleklenir
-    assert await main.authenticate_mcp(request(basic("admin", PASSWORD))) == "admin"
+    assert await access.authenticate_mcp(request(basic("admin", PASSWORD))) == "admin"
     assert len(cockpit.fake.logins) == logins
 
 
 def test_protected_resource_metadata():
     data = TestClient(main.app).get("/.well-known/oauth-protected-resource/sse").json()
-    assert data["resource"] == main.MCP_RESOURCE_URL
-    assert data["authorization_servers"] == [main.PUBLIC_URL + "/"]
+    assert data["resource"] == mcp_gateway.MCP_RESOURCE_URL
+    assert data["authorization_servers"] == [settings.PUBLIC_URL + "/"]
 
 
 def test_authorization_server_metadata():
     data = TestClient(main.app).get("/.well-known/oauth-authorization-server").json()
-    assert data["authorization_endpoint"] == main.PUBLIC_URL + "/authorize"
-    assert data["registration_endpoint"] == main.PUBLIC_URL + "/register"
+    assert data["authorization_endpoint"] == settings.PUBLIC_URL + "/authorize"
+    assert data["registration_endpoint"] == settings.PUBLIC_URL + "/register"
     assert data["code_challenge_methods_supported"] == ["S256"]
 
 
@@ -145,9 +149,9 @@ def oauth_flow(client, username="admin", password=PASSWORD, resource=None, token
     return client_id, verifier, request_id, resp
 
 
-def full_oauth_flow():
+def full_oauth_flow(resource=None):
     client = TestClient(main.app)
-    client_id, verifier, _, resp = oauth_flow(client)
+    client_id, verifier, _, resp = oauth_flow(client, resource=resource)
     assert resp.status_code == 302
     callback = urlparse(resp.headers["location"])
     params = parse_qs(callback.query)
@@ -169,7 +173,7 @@ def full_oauth_flow():
     assert again.status_code == 400
 
     # Token'lar diske hash'lenmiş yazılır
-    stored = open(main.oauth_provider.store_path).read()
+    stored = open(access.oauth_provider.store_path).read()
     assert tokens["access_token"] not in stored
     assert tokens["refresh_token"] not in stored
 
@@ -217,14 +221,14 @@ async def test_access_token_authenticates_mcp(cockpit, provider):
     def request(token):
         return Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())], "query_string": b""})
 
-    assert await main.authenticate_mcp(request(refreshed["access_token"])) == "admin"
-    assert await main.authenticate_mcp(request("uydurma")) is None
+    assert await access.authenticate_mcp(request(refreshed["access_token"])) == "admin"
+    assert await access.authenticate_mcp(request("uydurma")) is None
 
 
 @pytest.mark.anyio
 async def test_tokens_survive_restart_and_expire(cockpit, provider):
     tokens, _ = full_oauth_flow()
-    reloaded = auth.CockpitOAuthProvider(provider.store_path, provider.login_url)
+    reloaded = auth.CockpitOAuthProvider(provider.store_path, provider.login_url, token_policy=os.environ["MCP_API_KEY"])
     access = await reloaded.load_access_token(tokens["access_token"])
     # İlk access token refresh sonrası da süresi dolana kadar geçerli kalır
     assert access is not None and access.subject == "admin"
@@ -237,10 +241,10 @@ async def test_token_rejected_if_user_removed_from_allowed(cockpit, provider, mo
     from starlette.requests import Request
 
     tokens, _ = full_oauth_flow()
-    monkeypatch.setattr(main.authenticator, "allowed_users", {"baska"})
+    monkeypatch.setattr(access.authenticator, "allowed_users", {"baska"})
     req = Request({"type": "http", "headers": [(b"authorization", f"Bearer {tokens['access_token']}".encode())],
                    "query_string": b""})
-    assert await main.authenticate_mcp(req) is None
+    assert await access.authenticate_mcp(req) is None
 
 
 # --- Erişim token'ı (MCP_API_KEY) ikinci faktör olarak ---
@@ -250,7 +254,7 @@ LOGIN_TOKEN = "xxx-giris-token"
 
 @pytest.fixture
 def login_token(monkeypatch):
-    monkeypatch.setattr(main, "MCP_API_KEY", LOGIN_TOKEN)
+    monkeypatch.setattr(settings, "MCP_API_KEY", LOGIN_TOKEN)
     return LOGIN_TOKEN
 
 
@@ -295,7 +299,7 @@ def test_oauth_asks_token_when_not_in_url(cockpit, provider, login_token):
 
 def test_oauth_uses_token_from_connection_url(cockpit, provider, login_token):
     client = TestClient(main.app)
-    resource = f"{main.MCP_RESOURCE_URL}?token={LOGIN_TOKEN}"
+    resource = f"{mcp_gateway.MCP_RESOURCE_URL}?token={LOGIN_TOKEN}"
     _, _, _, resp = oauth_flow(client, resource=resource)
     assert "Gateway password" not in client.last_login_page
     assert resp.status_code == 302
@@ -304,7 +308,7 @@ def test_oauth_uses_token_from_connection_url(cockpit, provider, login_token):
 
 def test_oauth_wrong_token_in_url_asks_again(cockpit, provider, login_token):
     client = TestClient(main.app)
-    _, _, _, resp = oauth_flow(client, resource=f"{main.MCP_RESOURCE_URL}?token=yanlis-xxx")
+    _, _, _, resp = oauth_flow(client, resource=f"{mcp_gateway.MCP_RESOURCE_URL}?token=yanlis-xxx")
     assert 'name="token"' in client.last_login_page
     assert resp.status_code == 401
 
@@ -317,9 +321,9 @@ def test_sse_401_carries_valid_url_token_to_metadata(login_token):
     assert "?token=" not in header
 
     data = client.get("/.well-known/oauth-protected-resource/sse", params={"token": LOGIN_TOKEN}).json()
-    assert data["resource"] == f"{main.MCP_RESOURCE_URL}?token={LOGIN_TOKEN}"
+    assert data["resource"] == f"{mcp_gateway.MCP_RESOURCE_URL}?token={LOGIN_TOKEN}"
     data = client.get("/.well-known/oauth-protected-resource/sse", params={"token": "yanlis-xxx"}).json()
-    assert data["resource"] == main.MCP_RESOURCE_URL
+    assert data["resource"] == mcp_gateway.MCP_RESOURCE_URL
 
 
 @pytest.mark.anyio
@@ -331,10 +335,10 @@ async def test_basic_requires_token(cockpit, login_token):
                         "headers": [(k.encode(), v.encode()) for k, v in headers.items()]})
 
     creds = {"authorization": basic("admin", PASSWORD)}
-    assert await main.authenticate_mcp(request(creds)) is None
-    assert await main.authenticate_mcp(request({**creds, "x-mcp-token": "yanlis-xxx"})) is None
-    assert await main.authenticate_mcp(request({**creds, "x-mcp-token": LOGIN_TOKEN})) == "admin"
-    assert await main.authenticate_mcp(request(creds, f"token={LOGIN_TOKEN}".encode())) == "admin"
+    assert await access.authenticate_mcp(request(creds)) is None
+    assert await access.authenticate_mcp(request({**creds, "x-mcp-token": "yanlis-xxx"})) is None
+    assert await access.authenticate_mcp(request({**creds, "x-mcp-token": LOGIN_TOKEN})) == "admin"
+    assert await access.authenticate_mcp(request(creds, f"token={LOGIN_TOKEN}".encode())) == "admin"
 
 
 @pytest.mark.anyio

@@ -5,7 +5,7 @@
     * OAuth 2.1 (claude.ai, Claude Code vb.): istemci /authorize'a yönlendirir, kullanıcı
       Cockpit hesabıyla giriş yapar, istemci erişim token'ı alır.
     * HTTP Basic: Cockpit kullanıcı adı/şifresi doğrudan başlıkta.
-    * MCP_API_KEY: sabit token (geriye dönük uyumluluk, opsiyonel).
+    Her iki yöntemde MCP_API_KEY ikinci faktör olarak istenir; tek başına giriş sağlamaz.
 """
 import base64
 import hashlib
@@ -13,31 +13,43 @@ import json
 import os
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
     RefreshToken,
+    RegistrationError,
     TokenError,
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 import cockpit_client
+import security
 from i18n import t
 
 ACCESS_TOKEN_TTL = 3600
-REFRESH_TOKEN_TTL = 30 * 24 * 3600
+# OAuth oturumunun Cockpit girişinden itibaren en uzun ömrü: yenileme bu süreyi uzatmaz.
+# Sonrasında kullanıcı Cockpit hesabıyla yeniden giriş yapar.
+REFRESH_TOKEN_TTL = 7 * 24 * 3600
 AUTH_CODE_TTL = 300
 LOGIN_REQUEST_TTL = 600
 BASIC_CACHE_TTL = 300
+MAX_CLIENTS = 500
+MAX_PENDING_LOGINS = 1000
 SCOPE = "mcp"
 
 
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def without_query(url: str | None) -> str | None:
+    """Kayıtlara ?token= değeri düz metin geçmesin diye URL'yi sorgu kısmı olmadan döner."""
+    return urlsplit(str(url))._replace(query="", fragment="").geturl() if url else url
 
 
 class CockpitAuthenticator:
@@ -50,7 +62,7 @@ class CockpitAuthenticator:
         self._basic_cache: dict[str, float] = {}
 
     def is_allowed(self, username: str) -> bool:
-        return not self.allowed_users or username in self.allowed_users
+        return username in self.allowed_users
 
     async def login(self, username: str, password: str) -> str | None:
         """Başarılıysa None, değilse kullanıcıya gösterilecek hata mesajını döner."""
@@ -91,12 +103,14 @@ class CockpitOAuthProvider:
     böylece gateway yeniden başlasa da kullanıcıların tekrar giriş yapması gerekmez.
     """
 
-    def __init__(self, store_path: str, login_url: str, token_policy: str = ""):
+    def __init__(self, store_path: str, login_url: str, token_policy: str = "",
+                 is_allowed: Callable[[str], bool] | None = None):
         self.store_path = store_path
         self.login_url = login_url
         # Giriş token'ı (MCP_API_KEY) eklenir veya değiştirilirse eski oturumlar geçersiz olsun diye
         # token'ın hash'i saklanır; farklıysa kayıtlı erişim/refresh token'ları silinir.
         self.token_policy = _hash(token_policy) if token_policy else ""
+        self.is_allowed = is_allowed or (lambda _username: True)
         self.clients: dict[str, OAuthClientInformationFull] = {}
         self.access_tokens: dict[str, AccessToken] = {}
         self.refresh_tokens: dict[str, RefreshToken] = {}
@@ -121,6 +135,12 @@ class CockpitOAuthProvider:
             return
         self.access_tokens = {k: AccessToken.model_validate(v) for k, v in data.get("access_tokens", {}).items()}
         self.refresh_tokens = {k: RefreshToken.model_validate(v) for k, v in data.get("refresh_tokens", {}).items()}
+        # Eski sürümler resource alanında ?token= değerini düz metin saklıyordu
+        stored = [*self.access_tokens.values(), *self.refresh_tokens.values()]
+        if any(without_query(item.resource) != item.resource for item in stored):
+            for item in stored:
+                item.resource = without_query(item.resource)
+            self._save()
 
     def _save(self):
         now = time.time()
@@ -132,12 +152,7 @@ class CockpitOAuthProvider:
             "access_tokens": {k: v.model_dump(mode="json") for k, v in self.access_tokens.items()},
             "refresh_tokens": {k: v.model_dump(mode="json") for k, v in self.refresh_tokens.items()},
         }
-        os.makedirs(os.path.dirname(self.store_path) or ".", exist_ok=True)
-        tmp = self.store_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.store_path)
+        security.write_private_json(self.store_path, data)
 
     # --- İstemci kaydı ---
 
@@ -145,6 +160,14 @@ class CockpitOAuthProvider:
         return self.clients.get(client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        # /register kimlik doğrulamasızdır: kayıt sayısı sınırlı, yer açmak için token'ı olmayan
+        # en eski istemci silinir
+        if len(self.clients) >= MAX_CLIENTS:
+            active = {t.client_id for t in [*self.access_tokens.values(), *self.refresh_tokens.values()]}
+            idle = [cid for cid in self.clients if cid not in active]
+            if not idle:
+                raise RegistrationError("invalid_client_metadata", "too many registered clients")
+            del self.clients[idle[0]]
         self.clients[client_info.client_id] = client_info
         self._save()
 
@@ -154,6 +177,8 @@ class CockpitOAuthProvider:
         """Kullanıcıyı Cockpit giriş sayfasına yönlendirir."""
         now = time.time()
         self.pending = {k: v for k, v in self.pending.items() if v[2] > now}
+        while len(self.pending) >= MAX_PENDING_LOGINS:
+            del self.pending[next(iter(self.pending))]
         request_id = secrets.token_urlsafe(24)
         self.pending[request_id] = (client.client_id, params, now + LOGIN_REQUEST_TTL)
         return f"{self.login_url}?request={request_id}"
@@ -185,17 +210,10 @@ class CockpitOAuthProvider:
             code_challenge=params.code_challenge,
             redirect_uri=params.redirect_uri,
             redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
-            resource=params.resource,
+            resource=without_query(params.resource),
             subject=username,
         )
         return construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
-
-    def deny_authorization(self, request_id: str) -> str | None:
-        entry = self.pending.pop(request_id, None)
-        if not entry:
-            return None
-        params = entry[1]
-        return construct_redirect_uri(str(params.redirect_uri), error="access_denied", state=params.state)
 
     async def load_authorization_code(self, client: OAuthClientInformationFull, authorization_code: str):
         code = self.codes.get(authorization_code)
@@ -205,20 +223,23 @@ class CockpitOAuthProvider:
 
     # --- Token'lar ---
 
-    def _issue(self, client_id: str, scopes: list[str], subject: str | None, resource: str | None) -> OAuthToken:
+    def _issue(self, client_id: str, scopes: list[str], subject: str | None, resource: str | None,
+               session_expires_at: int | None = None) -> OAuthToken:
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         now = int(time.time())
+        session_end = session_expires_at or now + REFRESH_TOKEN_TTL
+        access_end = min(now + ACCESS_TOKEN_TTL, session_end)
         self.access_tokens[_hash(access)] = AccessToken(
             token=_hash(access), client_id=client_id, scopes=scopes,
-            expires_at=now + ACCESS_TOKEN_TTL, resource=resource, subject=subject,
+            expires_at=access_end, resource=resource, subject=subject,
         )
         self.refresh_tokens[_hash(refresh)] = RefreshToken(
             token=_hash(refresh), client_id=client_id, scopes=scopes,
-            expires_at=now + REFRESH_TOKEN_TTL, resource=resource, subject=subject,
+            expires_at=session_end, resource=resource, subject=subject,
         )
         self._save()
         return OAuthToken(
-            access_token=access, token_type="Bearer", expires_in=ACCESS_TOKEN_TTL,
+            access_token=access, token_type="Bearer", expires_in=access_end - now,
             refresh_token=refresh, scope=" ".join(scopes),
         )
 
@@ -230,15 +251,22 @@ class CockpitOAuthProvider:
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str):
         token = self.refresh_tokens.get(_hash(refresh_token))
-        if token and token.client_id == client.client_id:
-            return token
-        return None
+        if not token or token.client_id != client.client_id:
+            return None
+        if token.expires_at and token.expires_at < time.time():
+            return None
+        # Listeden çıkarılan kullanıcının oturumu yenilenemez
+        if not token.subject or not self.is_allowed(token.subject):
+            return None
+        return token
 
     async def exchange_refresh_token(self, client: OAuthClientInformationFull, refresh_token, scopes: list[str]) -> OAuthToken:
-        # Refresh token tek kullanımlık: yenisi verilir, eskisi silinir
+        # Refresh token tek kullanımlık: yenisi verilir, eskisi silinir.
+        # Parola elimizde olmadığından Cockpit yeniden sorulamaz; bunun yerine bitiş tarihi taşınır,
+        # böylece oturum yenilemeyle uzamaz ve süre sonunda Cockpit girişi gerekir.
         self.refresh_tokens.pop(refresh_token.token, None)
         return self._issue(client.client_id, scopes or refresh_token.scopes, refresh_token.subject,
-                           refresh_token.resource)
+                           refresh_token.resource, refresh_token.expires_at)
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         access = self.access_tokens.get(_hash(token))

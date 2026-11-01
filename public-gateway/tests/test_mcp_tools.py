@@ -4,7 +4,8 @@ import asyncssh
 import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
-import main
+import connections
+import mcp_gateway
 
 pytestmark = pytest.mark.anyio
 
@@ -17,6 +18,9 @@ class FakeResult:
 
 
 class FakeConn:
+    def get_server_host_key(self):
+        return None
+
     def __init__(self, result, calls):
         self.result = result
         self.calls = calls
@@ -45,17 +49,17 @@ def fake_ssh(monkeypatch):
             raise asyncssh.PermissionDenied("Permission denied")
         return FakeConn(state["result"], calls)
 
-    monkeypatch.setattr(main.asyncssh, "connect", connect)
+    monkeypatch.setattr(connections.asyncssh, "connect", connect)
     return calls, state
 
 
 async def call(name, arguments):
-    async with create_connected_server_and_client_session(main.mcp_server) as client:
+    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
         return await client.call_tool(name, arguments)
 
 
 async def test_list_tools():
-    async with create_connected_server_and_client_session(main.mcp_server) as client:
+    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
         result = await client.list_tools()
     tools = {t.name: t for t in result.tools}
     assert {"list_servers", "fleet_health", "run_remote_command", "service_status", "service_action"} <= set(tools)

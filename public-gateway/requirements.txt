@@ -1,11 +1,12 @@
-fastapi
-uvicorn
-itsdangerous
-websockets
-pydantic
-requests
-asyncssh
-httpx
-mcp>=1.10,<2
-cryptography
-bcrypt
+anyio==4.15.1
+asyncssh==2.24.1
+# asyncssh needs bcrypt to open passphrase-protected OpenSSH keys
+bcrypt==5.0.0
+cryptography==50.0.0
+fastapi==0.162.0
+httpx==0.28.1
+itsdangerous==2.2.0
+mcp==1.30.0
+pydantic==2.14.2
+uvicorn==0.54.0
+websockets==17.4
