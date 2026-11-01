@@ -48,7 +48,7 @@ Gateway tek bir Docker konteyneri olarak çalışan bir Python (FastAPI) uygulam
 
 | Arayüz | Protokol | Kullanan |
 | --- | --- | --- |
-| MCP uç noktası (`/sse`) | MCP, SSE taşıması, OAuth 2.1 | Yapay zekâ istemcileri |
+| MCP uç noktası (`/mcp`, deprecated `/sse`) | MCP, Streamable HTTP (eski istemciler için HTTP+SSE), OAuth 2.1 | Yapay zekâ istemcileri |
 | Web paneli (`/`) | HTTPS (reverse proxy arkasında) | Sistem yöneticileri |
 | Sunucu bağlantıları | Cockpit WebSocket (`cockpit1`), SSH | Gateway → sunucular |
 
@@ -85,7 +85,8 @@ Gateway'e giriş, gateway'in çalıştığı makinedeki (veya yapılandırılan)
 
 - Token tek başına giriş sağlamaz.
 - Token yanlışsa kullanıcı parolası Cockpit'e iletilmez.
-- `ALLOWED_USERS` ile gateway'e erişebilecek kullanıcılar sınırlandırılabilir.
+- `ALLOWED_USERS` gateway'e erişebilecek kullanıcıları belirler; boşsa gateway başlamaz.
+- Başarısız girişler IP adresi başına sınırlıdır.
 
 ### 4.2 MCP istemcileri
 
@@ -143,23 +144,23 @@ Değişiklik araçları `confirm: true` parametresi olmadan çalıştırılmaz; 
 | Alan | Kontrol |
 | --- | --- |
 | Kimlik doğrulama | Cockpit hesabı ve erişim token'ı ile iki faktör; izinli kullanıcı listesi |
-| Oturumlar | OAuth 2.1 ve PKCE; token'lar özet olarak saklanır; token değişiminde oturumlar sıfırlanır |
+| Oturumlar | OAuth 2.1 ve PKCE; token'lar özet olarak saklanır; OAuth oturumları girişten 7 gün, panel oturumları 8 saat sonra biter ve çıkışta iptal edilir; erişim token'ı değişince tüm oturumlar kapanır; açık bağlantılar yeniden doğrulanır |
 | Gizli bilgiler | Cockpit parolaları, proxy kimlik bilgileri ve ortak SSH anahtarları `SECRET_KEY`'den türetilen anahtarla (Fernet) şifreli saklanır; dosya izinleri `0600` |
 | Komut güvenliği | Komutlar argv dizisi olarak iletilir (kabuk yorumlaması yok); servis, paket ve port girdileri doğrulanır |
-| Değişiklik denetimi | Değiştiren işlemler açık onay gerektirir |
+| Değişiklik denetimi | Değiştiren işlemler istemcinin verdiği `confirm` alanını gerektirir; `MCP_READ_ONLY` bunları tümüyle kapatır |
 | Kaynak sınırları | Komutlar zaman aşımına tabidir (varsayılan 60 sn, uzun işlemler 15 dk); çıktılar 20.000 karakterle sınırlandırılır |
 | Ağ | Sunucu bağlantısında hata olursa güvenli tarafta kalınır (örneğin proxy ayarı çözülemezse doğrudan bağlantıya düşülmez) |
 
 ### 6.2 Bilinen sınırlamalar
 
 - Cockpit bağlantılarında TLS sertifika doğrulaması varsayılan olarak kapalıdır (kendinden imzalı sertifikalar nedeniyle). SSH tüneli içindeki Cockpit bağlantısında sertifika doğrulanmaz.
-- SSH bağlantılarında sunucu anahtarı doğrulanmaz (`known_hosts` kullanılmaz).
-- Bu nedenlerle çözüm, gateway ile sunucular arasındaki ağın güvenilir olduğu varsayımıyla tasarlanmıştır.
+- SSH sunucu anahtarı ilk bağlantıda kaydedilir (ilk kullanımda güven), bu yüzden ilk bağlantı doğrulanmaz; sonraki değişiklikler reddedilir.
+- Bu nedenlerle gateway ile sunucular arasındaki ağ, en azından ilk bağlantıya kadar güvenilir olmalıdır.
 
 ### 6.3 Önerilen işletim uygulamaları
 
-- `ALLOWED_USERS` mutlaka tanımlanmalı, erişim token'ı uzun ve rastgele seçilmelidir (örn. `openssl rand -hex 32`).
-- Gateway HTTPS sonlandıran bir reverse proxy arkasında yayınlanmalıdır.
+- `ALLOWED_USERS` kısa tutulmalıdır; `SECRET_KEY` veya erişim token'ı tanımlı değilse `data/` altında rastgele üretilir.
+- Gateway HTTPS sonlandıran bir reverse proxy arkasında yayınlanmalı, proxy adresi `TRUSTED_PROXIES`'e yazılmalıdır.
 - Sunucularda Cockpit portu dışarıya açılmamalı, mümkünse SSH tüneli kullanılmalıdır. Açılması gerekiyorsa yalnızca gateway'in IP adresine izin verilmelidir.
 - `SECRET_KEY` gizli tutulmalı ve değiştirilmemelidir; değiştirilirse saklanan parolalar çözülemez.
 

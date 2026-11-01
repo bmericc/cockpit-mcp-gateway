@@ -48,7 +48,7 @@ The gateway is a Python (FastAPI) application running as a single Docker contain
 
 | Interface | Protocol | Used by |
 | --- | --- | --- |
-| MCP endpoint (`/sse`) | MCP, SSE transport, OAuth 2.1 | AI clients |
+| MCP endpoint (`/mcp`, deprecated `/sse`) | MCP, Streamable HTTP (HTTP+SSE for older clients), OAuth 2.1 | AI clients |
 | Web panel (`/`) | HTTPS (behind a reverse proxy) | System administrators |
 | Server connections | Cockpit WebSocket (`cockpit1`), SSH | Gateway → servers |
 
@@ -87,7 +87,8 @@ Logging in to the gateway is verified with the Cockpit account on the machine th
 
 - The token alone does not grant access.
 - If the token is wrong, the user's password is not passed on to Cockpit.
-- `ALLOWED_USERS` restricts which users may access the gateway.
+- `ALLOWED_USERS` lists the users who may access the gateway; the gateway does not start if it is empty.
+- Failed logins are limited per IP address.
 
 ### 4.2 MCP clients
 
@@ -145,10 +146,10 @@ Change tools are not executed without the `confirm: true` parameter; in that cas
 | Area | Control |
 | --- | --- |
 | Authentication | Two factors with the Cockpit account and the access token; list of allowed users |
-| Sessions | OAuth 2.1 and PKCE; tokens are stored as digests; sessions are reset when the token changes |
+| Sessions | OAuth 2.1 and PKCE; tokens are stored as digests; OAuth sessions end 7 days after login, panel sessions after 8 hours and are revoked at logout; all sessions end when the access token changes; open connections are re-checked |
 | Secrets | Cockpit passwords, proxy credentials and shared SSH keys are stored encrypted (Fernet) with a key derived from `SECRET_KEY`; file mode `0600` |
 | Command safety | Commands are passed as an argv array (no shell interpretation); service, package and port inputs are validated |
-| Change control | Changing operations require explicit confirmation |
+| Change control | Changing operations require a `confirm` argument set by the client; `MCP_READ_ONLY` disables them entirely |
 | Audit | Tool calls, panel actions and logins are written to an audit log and shown in the panel |
 | Resource limits | Commands are subject to timeouts (default 60 s, long operations 15 min); outputs are limited to 20,000 characters |
 | Network | On a server connection error the gateway fails closed (for example, if the proxy setting cannot be decrypted it does not fall back to a direct connection) |
@@ -156,13 +157,13 @@ Change tools are not executed without the `confirm: true` parameter; in that cas
 ### 6.2 Known limitations
 
 - TLS certificate verification is off by default for Cockpit connections (because of self-signed certificates). The certificate is not verified for the Cockpit connection inside the SSH tunnel.
-- The server key is not verified for SSH connections (`known_hosts` is not used).
-- For these reasons the solution is designed on the assumption that the network between the gateway and the servers is trusted.
+- The SSH server key is stored on first connection (trust on first use), so the first connection is not verified; later changes are refused.
+- For these reasons the network between the gateway and the servers should be trusted, at least until the first connection.
 
 ### 6.3 Recommended operating practices
 
-- `ALLOWED_USERS` should always be set, and the access token should be long and random (e.g. `openssl rand -hex 32`).
-- The gateway should be published behind a reverse proxy that terminates HTTPS.
+- `ALLOWED_USERS` should stay short; if `SECRET_KEY` or the access token is not set, random values are generated under `data/`.
+- The gateway should be published behind a reverse proxy that terminates HTTPS, with its address in `TRUSTED_PROXIES`.
 - The Cockpit port should not be opened to the outside on the servers; use the SSH tunnel where possible. If it has to be opened, only the gateway's IP address should be allowed.
 - `SECRET_KEY` should be kept secret and not changed; if it changes, stored passwords can no longer be decrypted.
 

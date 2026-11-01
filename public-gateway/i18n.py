@@ -317,7 +317,9 @@ TR = {
     "No servers defined yet.": "Henüz tanımlı sunucu yok.",
     "No shared keys yet.": "Henüz ortak anahtar yok.",
     "Welcome, {user}!": "Hoş geldiniz, {user}!",
-    "MCP Gateway is active. SSE endpoint:": "MCP Gateway aktif. SSE Uç Noktası:",
+    "MCP Gateway is active. MCP endpoint:": "MCP Gateway etkin. MCP adresi:",
+    "For clients that only support the deprecated HTTP+SSE transport:":
+        "Yalnızca eski (deprecated) HTTP+SSE taşımasını destekleyen istemciler için:",
     "Registered Servers": "Kayıtlı Sunucular",
     "Name": "Ad",
     "SSH (fallback)": "SSH (yedek)",
@@ -439,5 +441,16 @@ TR = {
     "<b>{client}</b> wants to access the tools on this gateway.":
         "<b>{client}</b> bu gateway'deki araçlara erişmek istiyor.",
     "Authentication rejected.": "Kimlik doğrulama reddedildi.",
+    "Too many failed attempts. Try again in a few minutes.":
+        "Çok fazla başarısız deneme. Birkaç dakika sonra tekrar deneyin.",
+    "The gateway is in read-only mode; {name} is disabled.":
+        "Gateway salt okunur modda; {name} kapalı.",
+    "The SSH host key of {host} has changed, so the connection was refused. "
+    "If the server was reinstalled, use Forget host key in the panel; otherwise investigate first.":
+        "{host} SSH sunucu anahtarı değişti, bu yüzden bağlantı reddedildi. "
+        "Sunucu yeniden kurulduysa paneldeki Sunucu anahtarını unut düğmesini kullanın; değilse önce araştırın.",
+    "Forget host key": "Sunucu anahtarını unut",
+    "Host key of '{name}' forgotten; the next SSH connection stores the new key.":
+        "'{name}' sunucu anahtarı unutuldu; sonraki SSH bağlantısı yeni anahtarı kaydeder.",
     "Login with a Cockpit account is required": "Cockpit hesabıyla giriş gerekli",
 }

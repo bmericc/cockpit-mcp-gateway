@@ -19,4 +19,18 @@ jobs:
           cache: pip
           cache-dependency-path: public-gateway/requirements*.txt
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest -v
+      - name: Lint
+        run: python -m pyflakes *.py
+      - name: Tests
+        run: python -m pytest -v
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: cp sample.env .env && docker compose config --quiet
+      - name: Build image
+        run: docker build public-gateway

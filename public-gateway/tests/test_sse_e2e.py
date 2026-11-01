@@ -1,4 +1,5 @@
 """Gerçek uvicorn sunucusu + resmi MCP SSE client ile uçtan uca test."""
+import asyncio
 import logging
 import socket
 import threading
@@ -8,8 +9,12 @@ import pytest
 import uvicorn
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
+import mcp_gateway
+import access
 import main
+import settings
 
 pytestmark = pytest.mark.anyio
 
@@ -46,14 +51,14 @@ class LiveServer:
 @pytest.fixture
 def access_token(monkeypatch, tmp_path):
     """Cockpit girişi + erişim token'ı ile alınmış gibi bir OAuth erişim token'ı üretir."""
-    monkeypatch.setattr(main.oauth_provider, "store_path", str(tmp_path / "oauth.json"))
-    monkeypatch.setattr(main.authenticator, "allowed_users", set())
-    return main.oauth_provider._issue("test-client", ["mcp"], "admin", None).access_token
+    monkeypatch.setattr(access.oauth_provider, "store_path", str(tmp_path / "oauth.json"))
+    monkeypatch.setattr(access.authenticator, "allowed_users", {"admin", "plain"})
+    return access.oauth_provider._issue("test-client", ["mcp"], "admin", None).access_token
 
 
 @pytest.fixture
 def live_server(monkeypatch, servers_file):
-    monkeypatch.setattr(main, "MCP_API_KEY", "xxx")
+    monkeypatch.setattr(settings, "MCP_API_KEY", "xxx")
 
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -127,3 +132,83 @@ async def test_access_token_alone_is_not_enough(live_server):
         for kwargs in ({"params": {"token": "xxx"}}, {"headers": {"Authorization": "Bearer xxx"}}):
             resp = await client.get(f"{live_server.url}/sse", **kwargs)
             assert resp.status_code == 401
+
+
+async def open_stream(url, token):
+    import httpx
+
+    client = httpx.AsyncClient(trust_env=False, timeout=5)
+    stream = client.stream("GET", f"{url}/sse", headers={"Authorization": f"Bearer {token}"})
+    response = await stream.__aenter__()
+    assert response.status_code == 200
+    return client, stream, response
+
+
+async def read_until_closed(response):
+    async for _ in response.aiter_bytes():
+        pass
+
+
+async def test_open_stream_closes_when_user_is_removed(live_server, access_token, audit_file, monkeypatch):
+    monkeypatch.setattr(mcp_gateway, "SSE_RECHECK_SECONDS", 0.05)
+    client, stream, response = await open_stream(live_server.url, access_token)
+    try:
+        monkeypatch.setattr(access.authenticator, "allowed_users", {"baska"})
+        await asyncio.wait_for(read_until_closed(response), 5)
+    finally:
+        await stream.__aexit__(None, None, None)
+        await client.aclose()
+    assert audit_file(action="disconnect")[0]["user"] == "admin"
+    live_server.stop()
+    assert live_server.error_messages() == []
+
+
+async def test_open_stream_closes_when_token_expires(live_server, access_token, monkeypatch):
+    monkeypatch.setattr(mcp_gateway, "SSE_RECHECK_SECONDS", 0.05)
+    client, stream, response = await open_stream(live_server.url, access_token)
+    try:
+        for stored in access.oauth_provider.access_tokens.values():
+            stored.expires_at = 1
+        await asyncio.wait_for(read_until_closed(response), 5)
+    finally:
+        await stream.__aexit__(None, None, None)
+        await client.aclose()
+
+
+# --- Streamable HTTP ---
+
+async def test_streamable_http_roundtrip_is_logged_with_user(live_server, access_token, audit_file):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with streamablehttp_client(f"{live_server.url}/mcp", headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            assert "run_remote_command" in {t.name for t in tools.tools}
+            result = await session.call_tool("list_servers", {})
+            assert result.content[0].text == "{}"
+    entry = audit_file(action="list_servers")[0]
+    assert (entry["status"], entry["user"], entry["ip"]) == ("ok", "admin", "127.0.0.1")
+    live_server.stop()
+    assert live_server.error_messages() == []
+
+
+async def test_streamable_http_requires_login_on_every_request(live_server, access_token, monkeypatch):
+    import httpx
+
+    body = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json, text/event-stream"}
+    async with httpx.AsyncClient(trust_env=False) as client:
+        resp = await client.post(f"{live_server.url}/mcp", json=body)
+        assert resp.status_code == 401
+        assert 'oauth-protected-resource/mcp"' in resp.headers["www-authenticate"]
+        assert (await client.get(f"{live_server.url}/mcp", headers=headers)).status_code == 405
+        monkeypatch.setattr(access.authenticator, "allowed_users", {"baska"})
+        assert (await client.post(f"{live_server.url}/mcp", json=body, headers=headers)).status_code == 401
+
+
+async def test_metadata_names_the_transport(live_server):
+    import httpx
+
+    async with httpx.AsyncClient(trust_env=False) as client:
+        data = (await client.get(f"{live_server.url}/.well-known/oauth-protected-resource/mcp")).json()
+    assert data["resource"] == f"{settings.PUBLIC_URL}/mcp"

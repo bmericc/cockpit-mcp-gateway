@@ -21,7 +21,7 @@ cp sample.env .env      # değerleri düzenleyin
 docker compose up -d --build
 ```
 
-Gateway `7435` portunda çalışır. Önüne HTTPS sonlandıran bir reverse proxy (nginx, Caddy vb.) koyun; uygulama `X-Forwarded-*` başlıklarını dikkate alır.
+Gateway `7435` portunda çalışır. Önüne HTTPS sonlandıran bir reverse proxy (nginx, Caddy vb.) koyun; `X-Forwarded-*` başlıkları yalnızca `TRUSTED_PROXIES` adreslerinden kabul edilir. `docker-compose.yml` portu yalnızca `127.0.0.1` üzerinde açar; değiştirmek için `BIND_ADDRESS` tanımlayın.
 
 Hedef sunucularda Cockpit kurulu ve çalışır olmalı:
 
@@ -43,33 +43,35 @@ sudo ufw allow from GATEWAY_IP to any port 9090 proto tcp
 
 | Değişken | Açıklama |
 | --- | --- |
-| `SECRET_KEY` | Oturum çerezlerini imzalar, Cockpit şifrelerini şifreler. Uzun ve rastgele olmalı. **Değiştirilirse kayıtlı Cockpit şifreleri çözülemez.** |
+| `SECRET_KEY` | Oturum çerezlerini imzalar, Cockpit şifrelerini şifreler. Boş ya da örnek değerse bir kez rastgele üretilip `data/.secret_key` dosyasında saklanır. **Değiştirilirse kayıtlı Cockpit şifreleri çözülemez.** |
 | `PORT` | Dinlenecek port (varsayılan `7435`) |
 | `PUBLIC_URL` | Gateway'in dışarıdan erişilen adresi, örn. `https://mcp.ornek.com`. OAuth yönlendirmeleri bunu kullanır. |
 | `COCKPIT_AUTH_URL` | Girişleri doğrulayacak Cockpit. Varsayılan `https://host.docker.internal:9090` (gateway'in çalıştığı host makine). |
 | `COCKPIT_AUTH_VERIFY_TLS` | Bu Cockpit'in sertifikası doğrulansın mı (varsayılan `false`) |
-| `ALLOWED_USERS` | Gateway'e girebilecek Cockpit kullanıcıları (virgülle). **Boş bırakılırsa o makinede Cockpit'e girebilen her kullanıcı girebilir.** |
-| `MCP_API_KEY` | Cockpit girişine ek olarak istenen **erişim token'ı** (ikinci faktör). Uzun ve rastgele olmalı. Boşsa yalnızca Cockpit girişi yeter. Değiştirilirse tüm oturumlar kapanır. |
+| `ALLOWED_USERS` | Gateway'e girebilecek Cockpit kullanıcıları (virgülle). **Zorunludur: boşsa gateway başlamaz.** |
+| `MCP_API_KEY` | Cockpit girişine ek olarak istenen **erişim token'ı** (ikinci faktör). Boş ya da örnek değerse bir kez rastgele üretilip `data/.mcp_api_key` dosyasında saklanır. Değiştirilirse tüm panel ve OAuth oturumları kapanır. |
 | `OUTBOUND_PROXY` | Opsiyonel. Sunuculara giden bağlantılar için varsayılan proxy (`socks5://`, `socks5h://`, `http://`). Bkz. *Bağlantı proxy'si*. |
-| `SSH_LOGINS` | SSH bağlantılarında (tünel ve yedek) denenecek kullanıcılar ve key klasörleri. Varsayılan: `root:/root/.ssh,bmericc:/home/bmericc/.ssh` |
+| `SSH_LOGINS` | SSH bağlantılarında (tünel ve yedek) denenecek kullanıcılar ve key klasörleri. Varsayılan: `root:/root/.ssh` |
+| `TRUSTED_PROXIES` | `X-Forwarded-*` gönderebilecek reverse proxy adresleri (virgülle, CIDR olabilir). Varsayılan `127.0.0.1`. Proxy host üzerindeyse ve compose ağı kullanılıyorsa bridge aralığını verin, örn. `172.16.0.0/12`. `*` kullanmayın: istemciler audit kaydındaki adresi sahteleyebilir. |
+| `MCP_READ_ONLY` | `true` ise değişiklik yapan tüm araçlar kapanır (varsayılan `false`). `confirm` alanını model doldurur, insan onayı değildir; bu ayar öyledir. |
 | `AUDIT_LOG_MAX_MB` | İşlem kayıt dosyasının en fazla boyutu (varsayılan `10`). Bkz. *İşlem kayıtları*. |
 
-`docker-compose.yml`, host makineye `host.docker.internal` adıyla erişim sağlar. Ayrıca `/root/.ssh` ve `/home/bmericc/.ssh` klasörlerini salt okunur bağlar.
+`docker-compose.yml`, host makineye `host.docker.internal` adıyla erişim sağlar. Ayrıca `/root/.ssh` klasörünü salt okunur bağlar. Başka bir kullanıcının anahtarları için klasörü `docker-compose.override.yml` dosyasına ve `SSH_LOGINS`'e ekleyin. Dosya Linux yetkilerini de kısar ve kapsayıcı dosya sistemini salt okunur yapar.
 
 ## Giriş ve MCP istemcisine bağlanma
 
-MCP uç noktası: `https://<PUBLIC_URL>/sse`
+MCP uç noktası: `https://<PUBLIC_URL>/mcp` (Streamable HTTP). MCP spec'inde deprecated olan HTTP+SSE taşıması eski istemciler için `https://<PUBLIC_URL>/sse` adresinde durur.
 
-Giriş iki parçalıdır: **Cockpit kullanıcı adı/şifresi** ve `MCP_API_KEY` tanımlıysa **erişim token'ı**. Token tek başına giriş sağlamaz. Böylece zayıf bir Cockpit şifresi tek başına yetmez.
+Giriş iki parçalıdır: **Cockpit kullanıcı adı/şifresi** ve **erişim token'ı** (`MCP_API_KEY`). Token tek başına giriş sağlamaz. Böylece zayıf bir Cockpit şifresi tek başına yetmez.
 
 | Yöntem | Kullanım |
 | --- | --- |
-| **OAuth 2.1** (önerilen) | İstemci bağlanınca tarayıcıda giriş sayfası açılır: kullanıcı adı, Cockpit parolası ve gateway parolası (`MCP_API_KEY`). Giriş yapılınca istemci token alır (1 saat; refresh token 30 gün). |
+| **OAuth 2.1** (önerilen) | İstemci bağlanınca tarayıcıda giriş sayfası açılır: kullanıcı adı, Cockpit parolası ve gateway parolası (`MCP_API_KEY`). Giriş yapılınca istemci token alır (1 saat; yenileme girişten 7 gün sonra biter, sonra istemci Cockpit ile yeniden giriş yapar). |
 | **HTTP Basic** | `Authorization: Basic base64(kullanıcı:şifre)` + erişim token'ı (`X-MCP-Token: <token>` başlığı veya `?token=<token>`) |
 
-Gateway parolası MCP adresine eklenirse (`https://<PUBLIC_URL>/sse?token=<MCP_API_KEY>`) giriş sayfası onu ayrıca sormaz; yalnızca kullanıcı adı ve Cockpit parolası istenir. Adreste yoksa veya yanlışsa sayfada ikinci parola alanı çıkar. Web panelinde de aynısı geçerlidir (`/login?token=<token>`).
+Gateway parolası MCP adresine eklenirse (`https://<PUBLIC_URL>/mcp?token=<MCP_API_KEY>`) giriş sayfası onu ayrıca sormaz; yalnızca kullanıcı adı ve Cockpit parolası istenir. Adreste yoksa veya yanlışsa sayfada ikinci parola alanı çıkar. Web panelinde de aynısı geçerlidir (`/login?token=<token>`).
 
-**claude.ai:** *Settings → Connectors → Add custom connector* bölümüne `https://<PUBLIC_URL>/sse?token=<token>` adresini girin. Bağlanırken açılan sayfada Cockpit hesabınızla giriş yapın.
+**claude.ai:** *Settings → Connectors → Add custom connector* bölümüne `https://<PUBLIC_URL>/mcp?token=<token>` adresini girin. Bağlanırken açılan sayfada Cockpit hesabınızla giriş yapın.
 
 **Claude Code:**
 
@@ -206,17 +208,19 @@ python -m pytest
 
 ## Güvenlik notları
 
-- `ALLOWED_USERS`'ı mutlaka doldurun. Gateway, kayıtlı sunucularda yönetici yetkisiyle işlem yapabilir.
-- `MCP_API_KEY`'i uzun ve rastgele seçin (örn. `openssl rand -hex 32`). Cockpit şifresi zayıf olsa bile token olmadan giriş yapılamaz. Token yanlışsa şifre Cockpit'e hiç gönderilmez.
-- Cockpit bağlantılarında TLS doğrulaması varsayılan olarak kapalıdır (kendinden imzalı sertifikalar için); SSH tüneli içindeki Cockpit bağlantısında hiç doğrulanmaz. SSH'ta sunucu anahtarı doğrulanmaz (`known_hosts=None`). Bunlar güvenilir ağ varsayar.
-- `SECRET_KEY`'i gizli tutun ve değiştirmeyin.
+- Gateway, kayıtlı sunucularda yönetici yetkisiyle işlem yapabilir. `ALLOWED_USERS` listesini kısa tutun, değişiklik gerekmeyen yerlerde `MCP_READ_ONLY=true` kullanın.
+- Cockpit şifresi zayıf olsa bile `MCP_API_KEY` olmadan giriş yapılamaz. Token yanlışsa şifre Cockpit'e hiç gönderilmez. 10 başarısız denemeden sonra IP adresi 5 dakika engellenir.
+- URL'deki token gateway erişim logunda gizlenir, ama reverse proxy de loglar. Giriş sayfasında yazmayı tercih edin ya da proxy log biçiminde `token=` değerini maskeleyin.
+- Panel oturumları 8 saat sürer, çıkışta sunucuda iptal edilir ve gateway yeniden başlayınca biter. Açık SSE bağlantısı 30 saniyede bir yeniden doğrulanır; Streamable HTTP her isteği doğrular.
+- Cockpit bağlantılarında TLS doğrulaması varsayılan olarak kapalıdır (kendinden imzalı sertifikalar için); SSH tüneli içindeki Cockpit bağlantısında hiç doğrulanmaz. SSH'ta sunucu anahtarı ilk bağlantıda kaydedilir, değişirse paneldeki *Sunucu anahtarını unut* kullanılana kadar bağlantı reddedilir; bu yüzden ilk bağlantının güvenilir olması gerekir.
+- `SECRET_KEY`'i ve `data/` klasörünü gizli tutun, `SECRET_KEY`'i değiştirmeyin.
+- `servers.json` okunamazsa boş sayılmaz: gateway üzerine yazmak yerine hata verir.
 
 ## Bileşenler
 
 | Klasör | Açıklama |
 | --- | --- |
 | `public-gateway/` | MCP sunucusu, OAuth yetkilendirme, web paneli, Cockpit ve SSH istemcileri |
-| `internal-agent/` | WebSocket ile gateway'e bağlanması planlanan ajan. **Henüz kullanılmıyor.** |
 
 ## Lisans
 

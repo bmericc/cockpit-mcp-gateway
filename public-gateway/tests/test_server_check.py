@@ -1,12 +1,13 @@
 """Sunucu eklenirken / 'Test et' ile bağlantının gerçekten doğrulanması."""
-import base64
-import json
 
-import itsdangerous
 import pytest
 from fastapi.testclient import TestClient
 
+import access
+import connections
 import main
+import storage
+from panel import login_as
 from creds import PASSWORD, WRONG_PASSWORD
 
 
@@ -21,10 +22,9 @@ def cockpit():
 
 @pytest.fixture
 def client(monkeypatch, servers_file):
-    monkeypatch.setattr(main.authenticator, "allowed_users", {"admin"})
+    monkeypatch.setattr(access.authenticator, "allowed_users", {"admin"})
     c = TestClient(main.app)
-    data = base64.b64encode(json.dumps({"user": {"username": "admin"}}).encode())
-    c.cookies.set("session", itsdangerous.TimestampSigner(main.SECRET_KEY).sign(data).decode())
+    login_as(c, "admin")
     return c
 
 
@@ -38,25 +38,25 @@ def spawned(cockpit):
 
 def test_save_stores_detected_distro_and_panel_shows_it(client, cockpit):
     assert client.post("/servers", data=form(cockpit.url), follow_redirects=False).status_code == 303
-    assert main.load_servers()["srv"]["distro"] == DEBIAN
+    assert storage.load_servers()["srv"]["distro"] == DEBIAN
     page = client.get("/").text
     assert "<td>Debian GNU/Linux</td><td>12</td>" in page
 
 
 def test_skip_check_leaves_distro_unknown(client, cockpit):
     client.post("/servers", data=form(cockpit.url, skip_check="on"), follow_redirects=False)
-    assert "distro" not in main.load_servers()["srv"]
+    assert "distro" not in storage.load_servers()["srv"]
     assert "distribution not detected yet" in client.get("/").text
     assert spawned(cockpit) == []
 
 
 def test_test_button_refreshes_distro(client, cockpit):
     client.post("/servers", data=form(cockpit.url), follow_redirects=False)
-    servers = main.load_servers()
+    servers = storage.load_servers()
     servers["srv"]["distro"] = {"id": "old", "name": "Old", "package_manager": None}
-    main.save_servers(servers)
+    storage.save_servers(servers)
     client.post("/servers/srv/test", follow_redirects=False)
-    assert main.load_servers()["srv"]["distro"] == DEBIAN
+    assert storage.load_servers()["srv"]["distro"] == DEBIAN
 
 
 def form(cockpit_url, password=PASSWORD, **extra):
@@ -67,6 +67,9 @@ def form(cockpit_url, password=PASSWORD, **extra):
 
 
 class SSHConn:
+    def get_server_host_key(self):
+        return None
+
     async def run(self, command, check=False):
         class R:
             exit_status, stdout, stderr = 0, "", ""
@@ -82,7 +85,7 @@ class SSHConn:
 def test_save_with_correct_cockpit_credentials(cockpit, client):
     resp = client.post("/servers", data=form(cockpit.url), follow_redirects=False)
     assert "info=" in resp.headers["location"]
-    cfg = main.load_servers()["srv"]
+    cfg = storage.load_servers()["srv"]
     assert cfg["last_check"]["ok"] is True
     assert cfg["last_check"]["via"] == "cockpit"
     # Gerçekten komut çalıştırıldı
@@ -97,27 +100,27 @@ def test_wrong_cockpit_password_is_not_saved(cockpit, client, ssh_dirs):
     page = client.get(location).text
     assert "was not saved" in page
     assert "login rejected" in page
-    assert main.load_servers() == {}
+    assert storage.load_servers() == {}
 
 
 def test_unreachable_cockpit_is_not_saved(client, ssh_dirs):
     resp = client.post("/servers", data=form("http://127.0.0.1:1"), follow_redirects=False)
     assert "error=" in resp.headers["location"]
     assert "Could not connect" in client.get(resp.headers["location"]).text
-    assert main.load_servers() == {}
+    assert storage.load_servers() == {}
 
 
 def test_skip_check_clears_previous_status(cockpit, client, servers_file):
     servers_file({"srv": {"name": "srv", "host": "127.0.0.1", "last_check": {"ok": True, "message": "eski", "at": "x"}}})
     client.post("/servers", data=form(cockpit.url, password=WRONG_PASSWORD, skip_check="on"))
-    assert "last_check" not in main.load_servers()["srv"]
+    assert "last_check" not in storage.load_servers()["srv"]
 
 
 def test_skip_check_saves_without_connecting(cockpit, client):
     resp = client.post("/servers", data=form(cockpit.url, password=WRONG_PASSWORD, skip_check="on"),
                        follow_redirects=False)
     assert "info=" in resp.headers["location"]
-    assert "srv" in main.load_servers()
+    assert "srv" in storage.load_servers()
     assert cockpit.fake.logins == []
     assert "Not tested" in client.get("/").text
 
@@ -130,12 +133,12 @@ def test_ssh_only_server_checked_over_ssh(client, monkeypatch, ssh_dirs):
         seen.append(kw)
         return SSHConn()
 
-    monkeypatch.setattr(main.asyncssh, "connect", connect)
+    monkeypatch.setattr(connections.asyncssh, "connect", connect)
     resp = client.post("/servers", data={"name": "srv", "host": "10.0.0.1", "port": "22"}, follow_redirects=False)
     assert "info=" in resp.headers["location"]
-    assert main.load_servers()["srv"]["last_check"]["via"] == "ssh"
+    assert storage.load_servers()["srv"]["last_check"]["via"] == "ssh"
     # Bağlantı kurulumu da zaman aşımıyla sınırlı
-    assert seen[0]["connect_timeout"] == main.CHECK_TIMEOUT
+    assert seen[0]["connect_timeout"] == connections.CHECK_TIMEOUT
 
 
 def test_ssh_only_server_unreachable(client, monkeypatch, ssh_dirs):
@@ -144,26 +147,26 @@ def test_ssh_only_server_unreachable(client, monkeypatch, ssh_dirs):
     def refuse(host, **kw):
         raise OSError("Connection refused")
 
-    monkeypatch.setattr(main.asyncssh, "connect", refuse)
+    monkeypatch.setattr(connections.asyncssh, "connect", refuse)
     resp = client.post("/servers", data={"name": "srv", "host": "10.0.0.1", "port": "22"}, follow_redirects=False)
     assert "Connection refused" in client.get(resp.headers["location"]).text
-    assert main.load_servers() == {}
+    assert storage.load_servers() == {}
 
 
 def test_test_button_updates_status(cockpit, client, servers_file, ssh_dirs):
     servers_file({"srv": {"name": "srv", "host": "127.0.0.1", "cockpit_url": cockpit.url,
-                          "cockpit_user": "admin", "cockpit_password": main.encrypt_secret(WRONG_PASSWORD)}})
+                          "cockpit_user": "admin", "cockpit_password": storage.encrypt_secret(WRONG_PASSWORD)}})
     resp = client.post("/servers/srv/test", follow_redirects=False)
     assert "error=" in resp.headers["location"]
-    assert main.load_servers()["srv"]["last_check"]["ok"] is False
+    assert storage.load_servers()["srv"]["last_check"]["ok"] is False
     assert "✗" in client.get("/").text
 
-    cfg = main.load_servers()
-    cfg["srv"]["cockpit_password"] = main.encrypt_secret(PASSWORD)
+    cfg = storage.load_servers()
+    cfg["srv"]["cockpit_password"] = storage.encrypt_secret(PASSWORD)
     servers_file(cfg)
     resp = client.post("/servers/srv/test", follow_redirects=False)
     assert "info=" in resp.headers["location"]
-    assert main.load_servers()["srv"]["last_check"]["ok"] is True
+    assert storage.load_servers()["srv"]["last_check"]["ok"] is True
 
 
 def test_test_button_requires_login(servers_file):
@@ -173,11 +176,11 @@ def test_test_button_requires_login(servers_file):
 def test_cockpit_down_but_ssh_works_is_warning(client, monkeypatch, servers_file, ssh_dirs):
     # Cockpit portu kapalı, SSH yedeği çalışıyor: MCP araçları gibi test de bağlanabilmeli
     ssh_dirs("root")
-    monkeypatch.setattr(main.asyncssh, "connect", lambda host, **kw: SSHConn())
+    monkeypatch.setattr(connections.asyncssh, "connect", lambda host, **kw: SSHConn())
     servers_file({"srv": {"name": "srv", "host": "127.0.0.1", "cockpit_url": "https://127.0.0.1:1",
-                          "cockpit_user": "admin", "cockpit_password": main.encrypt_secret(PASSWORD)}})
+                          "cockpit_user": "admin", "cockpit_password": storage.encrypt_secret(PASSWORD)}})
     client.post("/servers/srv/test", follow_redirects=False)
-    check = main.load_servers()["srv"]["last_check"]
+    check = storage.load_servers()["srv"]["last_check"]
     assert check["ok"] is True and check["warning"] is True and check["via"] == "ssh"
     assert "Connected with the SSH fallback" in check["message"]
     # Boş hata mesajı yerine sebep yazılır

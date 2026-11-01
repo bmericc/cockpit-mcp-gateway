@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 import fleet_tools
 import i18n
+import access
 import main
 
 SOURCE_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -139,7 +140,7 @@ def test_tool_errors_are_translated(turkish):
 def test_panel_pages_follow_browser_language(monkeypatch, servers_file, sample_server):
     from test_web import login_as
 
-    monkeypatch.setattr(main.authenticator, "allowed_users", {"admin"})
+    monkeypatch.setattr(access.authenticator, "allowed_users", {"admin"})
     servers_file(sample_server)
     client = TestClient(main.app)
     login_as(client, "admin")

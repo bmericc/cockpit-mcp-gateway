@@ -6,7 +6,9 @@ import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
 
 import cockpit_client
-import main
+import connections
+import mcp_gateway
+import storage
 from creds import PASSWORD, WRONG_PASSWORD
 
 pytestmark = pytest.mark.anyio
@@ -103,6 +105,9 @@ class SSHResult:
 
 
 class SSHConn:
+    def get_server_host_key(self):
+        return None
+
     def __init__(self, commands):
         self.commands = commands
 
@@ -120,21 +125,21 @@ class SSHConn:
 @pytest.fixture
 def ssh(monkeypatch):
     commands = []
-    monkeypatch.setattr(main.asyncssh, "connect", lambda host, **kw: SSHConn(commands))
+    monkeypatch.setattr(connections.asyncssh, "connect", lambda host, **kw: SSHConn(commands))
     return commands
 
 
 def cockpit_server(url, password=PASSWORD, **extra):
     cfg = {
         "name": "box", "host": "127.0.0.1", "user": "root", "ssh_key_path": "/k",
-        "cockpit_url": url, "cockpit_user": "admin", "cockpit_password": main.encrypt_secret(password),
+        "cockpit_url": url, "cockpit_user": "admin", "cockpit_password": storage.encrypt_secret(password),
     }
     cfg.update(extra)
     return {"box": cfg}
 
 
 async def call(name, arguments):
-    async with create_connected_server_and_client_session(main.mcp_server) as client:
+    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
         return await client.call_tool(name, arguments)
 
 
@@ -178,7 +183,7 @@ async def test_cockpit_and_ssh_both_fail(servers_file, monkeypatch, ssh_dirs):
     def refuse(host, **kw):
         raise OSError("Connection refused")
 
-    monkeypatch.setattr(main.asyncssh, "connect", refuse)
+    monkeypatch.setattr(connections.asyncssh, "connect", refuse)
     servers_file(cockpit_server("http://127.0.0.1:1"))
     text = (await call("server_info", {"server_name": "box"})).content[0].text
     assert "Could not connect to Cockpit" in text
@@ -204,14 +209,14 @@ async def test_list_servers_hides_password(servers_file):
 
 
 def test_default_cockpit_url():
-    assert main.cockpit_url({"host": "192.168.0.98"}) == "https://192.168.0.98:9090"
+    assert connections.cockpit_url({"host": "192.168.0.98"}) == "https://192.168.0.98:9090"
 
 
 def test_encrypt_roundtrip():
-    token = main.encrypt_secret(PASSWORD)
+    token = storage.encrypt_secret(PASSWORD)
     assert token != PASSWORD
-    assert main.decrypt_secret(token) == PASSWORD
-    assert main.decrypt_secret("bozuk") is None
+    assert storage.decrypt_secret(token) == PASSWORD
+    assert storage.decrypt_secret("bozuk") is None
 
 
 # --- SSH tüneli içinden Cockpit ---
@@ -244,7 +249,7 @@ class TunnelSSHConn(SSHConn):
 @pytest.fixture
 def tunnel_ssh(cockpit, monkeypatch):
     commands, forwards = [], []
-    monkeypatch.setattr(main.asyncssh, "connect",
+    monkeypatch.setattr(connections.asyncssh, "connect",
                         lambda host, **kw: TunnelSSHConn(commands, cockpit.port, forwards))
     return commands, forwards
 
@@ -273,8 +278,8 @@ async def test_unreachable_direct_cockpit_is_remembered(cockpit, servers_file, t
     servers_file(cockpit_server("http://127.0.0.1:1"))
     await call("failed_services", {"server_name": "box"})
     attempts = []
-    original = main.connect_cockpit_direct
-    monkeypatch.setattr(main, "connect_cockpit_direct", lambda *a, **kw: attempts.append(1) or original(*a, **kw))
+    original = connections.connect_cockpit_direct
+    monkeypatch.setattr(connections, "connect_cockpit_direct", lambda *a, **kw: attempts.append(1) or original(*a, **kw))
     data = json.loads((await call("failed_services", {"server_name": "box"})).content[0].text)
     # İkinci çağrıda doğrudan bağlantı beklenmeden tünel kullanılır
     assert attempts == []
@@ -299,6 +304,6 @@ async def test_tunnel_failure_falls_back_to_plain_ssh(servers_file, ssh):
 
 async def test_check_server_reports_tunnel(cockpit, tunnel_ssh, ssh_dirs):
     cfg = cockpit_server("http://127.0.0.1:1")["box"]
-    result = await main.check_server(cfg)
+    result = await connections.check_server(cfg)
     assert result["ok"] is True and result["via"] == "cockpit-ssh"
     assert not result.get("warning")

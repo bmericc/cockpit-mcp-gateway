@@ -7,7 +7,10 @@ from fastapi.testclient import TestClient
 from mcp.shared.memory import create_connected_server_and_client_session
 
 import fleet_tools
+import connections
 import main
+import mcp_gateway
+import storage
 
 # --- Ayrıştırıcılar ---
 
@@ -214,6 +217,9 @@ class Result:
 
 class ScriptedConn:
     """Komut metnine göre yanıt veren sahte SSH bağlantısı."""
+    def get_server_host_key(self):
+        return None
+
 
     def __init__(self, state):
         self.state = state
@@ -254,7 +260,7 @@ def ssh(monkeypatch, servers_file):
             raise OSError("No route to host")
         return ScriptedConn(state)
 
-    monkeypatch.setattr(main.asyncssh, "connect", connect)
+    monkeypatch.setattr(connections.asyncssh, "connect", connect)
     servers_file({
         "root-box": {"name": "root-box", "host": "10.0.0.1", "user": "root", "ssh_key_path": "/k"},
         "user-box": {"name": "user-box", "host": "10.0.0.2", "user": "bmericc", "ssh_key_path": "/k"},
@@ -263,7 +269,7 @@ def ssh(monkeypatch, servers_file):
 
 
 async def call(name, arguments):
-    async with create_connected_server_and_client_session(main.mcp_server) as client:
+    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
         return await client.call_tool(name, arguments)
 
 
@@ -502,7 +508,7 @@ async def test_distro_is_checked_on_every_connection(ssh):
     await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
     await call("package_remove", {"server_name": "root-box", "names": ["htop"], "confirm": True})
     assert reads_os_release(ssh) == 2
-    distro = main.load_servers()["root-box"]["distro"]
+    distro = storage.load_servers()["root-box"]["distro"]
     assert (distro["name"], distro["version"], distro["package_manager"]) == ("Ubuntu", "24.04", "apt")
     assert not any("dnf" in c for c in ssh["commands"])
 
@@ -514,7 +520,7 @@ async def test_stored_distro_is_used_when_check_fails(ssh, servers_file):
     ssh["script"] = [("os-release", Result(1, "", "No such file"))]
     await call("package_install", {"server_name": "deb", "names": ["htop"], "confirm": True})
     assert "apt-get" in ssh["commands"][-1]
-    assert main.load_servers()["deb"]["distro"] == DEBIAN_DISTRO
+    assert storage.load_servers()["deb"]["distro"] == DEBIAN_DISTRO
 
 
 @pytestmark_anyio
@@ -524,7 +530,7 @@ async def test_timed_out_tool_listing_keeps_stored_distro(ssh, servers_file):
     ssh["os_release"] = 'ID=debian\nNAME="Debian"\nVERSION_ID="12"\n'
     ssh["script"] = [("/usr/sbin/ufw", Result(None, "", ""))]
     await call("failed_services", {"server_name": "deb"})
-    assert main.load_servers()["deb"]["distro"] == DEBIAN_DISTRO
+    assert storage.load_servers()["deb"]["distro"] == DEBIAN_DISTRO
 
 
 @pytestmark_anyio
@@ -533,7 +539,7 @@ async def test_all_tools_check_distro(ssh):
     await call("run_remote_command", {"server_name": "root-box", "command": "uptime", "confirm": True})
     await call("fleet_health", {})
     assert reads_os_release(ssh) == 4
-    assert main.load_servers()["user-box"]["distro"]["id"] == "rhel"
+    assert storage.load_servers()["user-box"]["distro"]["id"] == "rhel"
 
 
 @pytestmark_anyio
@@ -551,14 +557,14 @@ async def test_changed_server_updates_the_record_and_is_used_at_once(ssh, server
     ssh["script"] = [("ufw status", Result(0, "Status: active\n"))]
     data = payload(await call("firewall_status", {"server_name": "deb"}))
     assert data["firewall"] == "ufw"
-    assert main.load_servers()["deb"]["distro"]["firewall"] == "ufw"
+    assert storage.load_servers()["deb"]["distro"]["firewall"] == "ufw"
 
 
 @pytestmark_anyio
 async def test_unchanged_distro_is_not_rewritten(ssh, servers_file, monkeypatch):
     await call("failed_services", {"server_name": "root-box"})
     writes = []
-    monkeypatch.setattr(main, "save_servers", lambda servers: writes.append(servers))
+    monkeypatch.setattr(storage, "save_servers", lambda servers: writes.append(servers))
     await call("failed_services", {"server_name": "root-box"})
     assert writes == []
 
@@ -571,7 +577,7 @@ async def test_unsupported_distro_runs_no_package_command(ssh):
     assert "Arch Linux" in result.content[0].text
     assert not any("install" in c for c in ssh["commands"])
     # Bilinen dağıtım kaydedilir; sonraki çağrılar yeniden sormaz
-    assert main.load_servers()["root-box"]["distro"]["id"] == "arch"
+    assert storage.load_servers()["root-box"]["distro"]["id"] == "arch"
     await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
     assert not any("install" in c for c in ssh["commands"])
 
@@ -582,7 +588,7 @@ async def test_undetectable_distro_is_error_and_not_stored(ssh):
     result = await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
     assert result.isError
     assert ssh["commands"] == []
-    assert "distro" not in main.load_servers()["root-box"]
+    assert "distro" not in storage.load_servers()["root-box"]
 
 
 @pytestmark_anyio
@@ -624,7 +630,7 @@ def debian(ssh, servers_file):
 async def test_detection_records_security_tools(ssh, listing, active, firewall, selinux, apparmor):
     ssh["script"] = [("/usr/sbin/ufw", Result(2, listing)), ("is-active firewalld", Result(0, active))]
     await call("package_info", {"server_name": "root-box", "name": "htop"})
-    distro = main.load_servers()["root-box"]["distro"]
+    distro = storage.load_servers()["root-box"]["distro"]
     assert (distro["firewall"], distro["selinux"], distro["apparmor"]) == (firewall, selinux, apparmor)
 
 
@@ -744,8 +750,8 @@ async def test_apparmor_status_not_installed_runs_nothing(ssh):
 
 @pytestmark_anyio
 async def test_migration_fills_old_records(ssh, audit_file):
-    await main.migrate_servers()
-    servers = main.load_servers()
+    await connections.migrate_servers()
+    servers = storage.load_servers()
     assert servers["root-box"]["distro"]["version"] == "9.4"
     assert servers["user-box"]["distro"]["package_manager"] == "dnf"
     entry = audit_file(source="system")[0]
@@ -758,7 +764,7 @@ async def test_migration_runs_nothing_when_up_to_date(ssh, servers_file, audit_f
     servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
                           "distro": {"id": "arch", "name": "Arch", "version": None, "package_manager": None,
                                      "firewall": None, "selinux": False, "apparmor": False}}})
-    await main.migrate_servers()
+    await connections.migrate_servers()
     assert ssh["connects"] == []
     assert audit_file(source="system") == []
 
@@ -768,15 +774,15 @@ async def test_migration_upgrades_distro_without_version(ssh, servers_file):
     servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
                           "distro": {"id": "debian", "name": "Debian", "package_manager": "apt"}}})
     ssh["script"] = [("os-release", Result(0, 'ID=debian\nNAME="Debian"\nVERSION_ID="12"\n'))]
-    await main.migrate_servers()
-    assert main.load_servers()["deb"]["distro"]["version"] == "12"
+    await connections.migrate_servers()
+    assert storage.load_servers()["deb"]["distro"]["version"] == "12"
 
 
 @pytestmark_anyio
 async def test_migration_skips_unreachable_and_keeps_going(ssh, audit_file):
     ssh["unreachable"].add("10.0.0.2")
-    await main.migrate_servers()
-    servers = main.load_servers()
+    await connections.migrate_servers()
+    servers = storage.load_servers()
     assert "distro" in servers["root-box"]
     assert "distro" not in servers["user-box"]
     entry = audit_file(source="system")[0]
@@ -789,7 +795,7 @@ def test_migration_starts_with_the_app(monkeypatch):
     async def fake():
         calls.append(True)
 
-    monkeypatch.setattr(main, "migrate_servers", fake)
+    monkeypatch.setattr(connections, "migrate_servers", fake)
     with TestClient(main.app):
         pass
     assert calls == [True]

@@ -3,8 +3,11 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import web_panel
 import audit_log
+import connections
 import main
+from panel import csrf_token
 from creds import PASSWORD, WRONG_PASSWORD
 from test_auth import cockpit  # noqa: F401
 from test_mcp_tools import call, fake_ssh  # noqa: F401
@@ -68,11 +71,11 @@ def test_log_file_is_private(audit_file):
 @pytest.mark.anyio
 async def test_tool_call_is_logged_with_commands(servers_file, sample_server, fake_ssh, audit_file):  # noqa: F811
     servers_file(sample_server)
-    token = main._mcp_actor.set({"user": "admin", "ip": "203.0.113.7"})
+    token = connections._mcp_actor.set({"user": "admin", "ip": "203.0.113.7"})
     try:
         await call("run_remote_command", {"confirm": True, "server_name": "prod-db", "command": "systemctl status nginx", "as_root": True})
     finally:
-        main._mcp_actor.reset(token)
+        connections._mcp_actor.reset(token)
 
     entry = audit_file()[0]
     assert (entry["source"], entry["action"], entry["status"]) == ("mcp", "run_remote_command", "ok")
@@ -116,7 +119,7 @@ async def test_command_log_does_not_leak_between_calls(servers_file, sample_serv
     servers_file(sample_server)
     await call("run_remote_command", {"confirm": True, "server_name": "prod-db", "command": "uptime"})
     await call("list_servers", {})
-    assert main._command_log.get() is None
+    assert connections._command_log.get() is None
     assert "commands" not in audit_file()[0]
 
 
@@ -126,7 +129,7 @@ def test_web_login_and_logout_are_logged(cockpit, servers_file, audit_file):  # 
     client = TestClient(main.app)
     client.post("/login", data={"username": "admin", "password": WRONG_PASSWORD})
     client.post("/login", data={"username": "admin", "password": PASSWORD})
-    client.get("/logout")
+    client.post("/logout", data={"csrf": csrf_token(client)})
 
     entries = audit_file(source="web")
     assert [(e["action"], e["status"], e["user"]) for e in entries] == [
@@ -180,7 +183,7 @@ def test_logs_page_shows_and_filters_entries(admin_client):  # noqa: F811
 
 
 def test_logs_page_paging(admin_client, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(main, "LOGS_PER_PAGE", 2)
+    monkeypatch.setattr(web_panel, "LOGS_PER_PAGE", 2)
     for i in range(3):
         audit_log.record("mcp", f"arac-{i}")
     first = admin_client.get("/logs", params={"source": "mcp"}).text

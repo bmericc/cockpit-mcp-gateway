@@ -1,12 +1,11 @@
-version: '3.8'
-
 services:
   gateway:
     build: ./public-gateway
     container_name: mcp-public-gateway
     restart: always
+    # Bound to loopback for a reverse proxy on the same machine. Set BIND_ADDRESS to expose it elsewhere.
     ports:
-      - "7435:7435"
+      - "${BIND_ADDRESS:-127.0.0.1}:7435:7435"
     env_file:
       - .env
     # The COCKPIT_AUTH_URL default reaches Cockpit on the host machine
@@ -15,7 +14,17 @@ services:
     volumes:
       - ./data:/app/data
       - /root/.ssh:/root/.ssh:ro
-      - /home/bmericc/.ssh:/home/bmericc/.ssh:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Needed to write ./data and read key folders owned by other users
+    cap_add:
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
     networks:
       - mcp-net
 
