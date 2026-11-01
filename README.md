@@ -18,7 +18,8 @@ For a detailed description of the architecture and security: [Technical Overview
 
 ```bash
 cp sample.env .env      # edit the values
-docker compose up -d --build
+docker compose pull
+docker compose up -d --no-build
 ```
 
 The gateway listens on port `7435`. Put a reverse proxy that terminates HTTPS (nginx, Caddy etc.) in front of it; `X-Forwarded-*` headers are honoured only from the addresses in `TRUSTED_PROXIES`. `docker-compose.yml` publishes the port on `127.0.0.1` only; set `BIND_ADDRESS` to change that.
