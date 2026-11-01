@@ -22,7 +22,7 @@ docker compose pull
 docker compose up -d --no-build
 ```
 
-`linux/amd64` ve `linux/arm64` imajları `ghcr.io/bmericc/cockpit-mcp-gateway` ve Docker Hub'da (`bmericc/cockpit-mcp-gateway`) yayınlanır.
+`linux/amd64`, `linux/arm64` ve `linux/arm/v7` imajları `ghcr.io/bmericc/cockpit-mcp-gateway` ve Docker Hub'da (`bmericc/cockpit-mcp-gateway`) yayınlanır. Sürümler etiketlenir (`1.0.0`, `1.0`); birine sabitlemek için `IMAGE_TAG` tanımlayın. Sürüm `public-gateway/VERSION` dosyasındadır, `v1.0.0` git etiketi bununla aynı olmalıdır.
 
 Gateway `7435` portunda çalışır. Önüne HTTPS sonlandıran bir reverse proxy (nginx, Caddy vb.) koyun; `X-Forwarded-*` başlıkları yalnızca `TRUSTED_PROXIES` adreslerinden kabul edilir. `docker-compose.yml` portu yalnızca `127.0.0.1` üzerinde açar; değiştirmek için `BIND_ADDRESS` tanımlayın.
 

@@ -32,7 +32,7 @@ def tool_allowed(spec: fleet_tools.ToolSpec | None) -> bool:
     return not settings.READ_ONLY or (spec is not None and spec.read_only)
 
 # --- MCP Sunucu Tanımları ---
-mcp_server = Server("cockpit-mcp-gateway")
+mcp_server = Server("cockpit-mcp-gateway", version=settings.VERSION)
 
 def server_name_prop() -> dict:
     return {"server_name": {"type": "string", "description": t("Registered server name (e.g. prod-db)")}}

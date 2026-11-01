@@ -4,6 +4,9 @@ import os
 
 import security
 
+with open(os.path.join(os.path.dirname(__file__), "VERSION"), encoding="utf-8") as _f:
+    VERSION = _f.read().strip()
+
 # Boş ya da örnek değerse data/ altında rastgele üretilip kalıcı olarak saklanır
 SECRET_KEY = security.load_or_create_secret("SECRET_KEY", "data/.secret_key")
 # Gateway'in dışarıdan erişilen adresi (OAuth yönlendirmeleri ve metadata için)

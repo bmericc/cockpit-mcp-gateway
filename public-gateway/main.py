@@ -36,7 +36,7 @@ async def lifespan(_app: FastAPI):
     migration.cancel()
     await asyncio.gather(migration, return_exceptions=True)
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, version=settings.VERSION)
 
 app.add_middleware(
     SessionMiddleware,
