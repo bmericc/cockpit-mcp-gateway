@@ -1,5 +1,6 @@
 services:
   gateway:
+    image: ghcr.io/bmericc/cockpit-mcp-gateway:${IMAGE_TAG:-latest}
     build: ./public-gateway
     container_name: mcp-public-gateway
     restart: always
