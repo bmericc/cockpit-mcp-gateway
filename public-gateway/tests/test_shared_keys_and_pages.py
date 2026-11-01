@@ -145,8 +145,8 @@ def page_title(text):
 
 
 def test_titles(client):
-    assert page_title(client.get("/").text) == "Servers · RHEL MCP Gateway"
+    assert page_title(client.get("/").text) == "Servers · Cockpit MCP Gateway"
     anon = TestClient(main.app)
-    assert page_title(anon.get("/login").text) == "RHEL MCP Gateway - Login · RHEL MCP Gateway"
-    assert page_title(anon.post("/servers", data={}).text) == "Access denied · RHEL MCP Gateway"
-    assert page_title(anon.get("/oauth/login", params={"request": "yok"}).text) == "Invalid login request · RHEL MCP Gateway"
+    assert page_title(anon.get("/login").text) == "Cockpit MCP Gateway - Login · Cockpit MCP Gateway"
+    assert page_title(anon.post("/servers", data={}).text) == "Access denied · Cockpit MCP Gateway"
+    assert page_title(anon.get("/oauth/login", params={"request": "yok"}).text) == "Invalid login request · Cockpit MCP Gateway"

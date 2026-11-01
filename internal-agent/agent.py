@@ -4,7 +4,7 @@ import subprocess
 import json
 import os
 
-GATEWAY_URL = os.getenv("GATEWAY_URL", "ws://sizin-public-sunucu-ip:7435/ws/agent?agent_id=kurumsal-rhel-01")
+GATEWAY_URL = os.getenv("GATEWAY_URL", "ws://sizin-public-sunucu-ip:7435/ws/agent?agent_id=sunucu-01")
 
 async def run_agent():
     while True:

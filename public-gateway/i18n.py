@@ -156,8 +156,8 @@ TR = {
 
     # --- MCP tools (main) ---
     "Registered server name (e.g. prod-db)": "Kayıtlı sunucu adı (örn: prod-db)",
-    "Lists all registered RHEL servers (without passwords) and whether a Cockpit login is configured.":
-        "Kayıtlı tüm RHEL sunucularını (şifreler hariç) ve Cockpit girişi tanımlı olup olmadığını listeler.",
+    "Lists all registered servers (without passwords) and whether a Cockpit login is configured.":
+        "Kayıtlı tüm sunucuları (şifreler hariç) ve Cockpit girişi tanımlı olup olmadığını listeler.",
     "Collects a load, failed-service and root-disk-usage summary from all registered servers in parallel.":
         "Tüm kayıtlı sunucuların yük, çökmüş servis ve kök disk doluluğu özetini paralel olarak toplar.",
     "Runs an arbitrary Linux command on a registered server. Prefer a purpose-built tool when one exists. "
@@ -183,7 +183,7 @@ TR = {
     "package name": "paket adı",
     "port (e.g. 8080/tcp)": "port (örn. 8080/tcp)",
     "time expression": "zaman ifadesi",
-    "firewalld service name": "firewalld servis adı",
+    "firewall service name": "güvenlik duvarı servis adı",
     "At least one package name is required.": "En az bir paket adı verilmeli.",
     "Package name cannot end with '{suffix}': {value}": "Paket adı '{suffix}' ile bitemez: {value}",
     "Invalid port: {value}": "Geçersiz port: {value}",
@@ -193,6 +193,14 @@ TR = {
     "The grep expression may be at most 200 characters.": "grep ifadesi en fazla 200 karakter olabilir.",
     "Invalid sort order: {value}": "Geçersiz sıralama: {value}",
     "No SELinux denials in the last 10 minutes.": "Son 10 dakikada SELinux engellemesi yok.",
+    "No AppArmor denials in the last 10 minutes.": "Son 10 dakikada AppArmor engellemesi yok.",
+    "SELinux is not installed on this server.": "Bu sunucuda SELinux kurulu değil.",
+    "AppArmor is not installed on this server.": "Bu sunucuda AppArmor kurulu değil.",
+    "No firewalld or ufw was found on this server.": "Bu sunucuda firewalld veya ufw bulunamadı.",
+    "ufw is inactive, so the rule takes effect only after it is enabled. The gateway does not enable ufw.":
+        "ufw kapalı, bu yüzden kural ancak açıldıktan sonra geçerli olur. Gateway ufw'yi açmaz.",
+    "Returns the AppArmor profile status and recent AppArmor denials (Debian/Ubuntu).":
+        "AppArmor profil durumunu ve son AppArmor engellemelerini döndürür (Debian/Ubuntu).",
     "Invalid action: {value}": "Geçersiz işlem: {value}",
     "Exactly one of the port or service parameters must be given.":
         "port veya service parametrelerinden yalnızca biri verilmeli.",
@@ -221,30 +229,31 @@ TR = {
     "Number of processes (default 10, max 50)": "Süreç sayısı (varsayılan 10, en çok 50)",
     "Returns IP addresses, the routing table and listening ports.":
         "IP adreslerini, yönlendirme tablosunu ve dinlenen portları döndürür.",
-    "Returns the firewalld state and active rules.": "firewalld durumunu ve aktif kuralları döndürür.",
+    "Returns the firewall state and active rules (firewalld or ufw).":
+        "Güvenlik duvarı durumunu ve aktif kuralları döndürür (firewalld veya ufw).",
     "Returns the SELinux mode and recent SELinux (AVC) denials.":
         "SELinux modunu ve son SELinux (AVC) engellemelerini döndürür.",
-    "Lists pending package updates (dnf on RHEL family, apt on Debian/Ubuntu).":
-        "Bekleyen paket güncellemelerini listeler (RHEL ailesinde dnf, Debian/Ubuntu'da apt).",
+    "Lists pending package updates (apt on Debian/Ubuntu, dnf on Fedora/RHEL).":
+        "Bekleyen paket güncellemelerini listeler (Debian/Ubuntu'da apt, Fedora/RHEL'de dnf).",
     "Security updates only": "Sadece güvenlik güncellemeleri",
-    "Returns whether a package is installed, its version and its package info (dnf on RHEL family, apt on Debian/Ubuntu).":
-        "Bir paketin kurulu olup olmadığını, sürümünü ve paket bilgisini döndürür (RHEL ailesinde dnf, Debian/Ubuntu'da apt).",
+    "Returns whether a package is installed, its version and its package info (apt on Debian/Ubuntu, dnf on Fedora/RHEL).":
+        "Bir paketin kurulu olup olmadığını, sürümünü ve paket bilgisini döndürür (Debian/Ubuntu'da apt, Fedora/RHEL'de dnf).",
     "Package name": "Paket adı",
     "Starts, stops, restarts, reloads, enables or disables a systemd service.":
         "Bir systemd servisini başlatır, durdurur, yeniden başlatır, yeniden yükler, etkinleştirir veya devre dışı bırakır.",
     "Service name": "Servis adı",
-    "Installs package updates (dnf on RHEL family, apt on Debian/Ubuntu).":
-        "Paket güncellemelerini kurar (RHEL ailesinde dnf, Debian/Ubuntu'da apt).",
+    "Installs package updates (apt on Debian/Ubuntu, dnf on Fedora/RHEL).":
+        "Paket güncellemelerini kurar (Debian/Ubuntu'da apt, Fedora/RHEL'de dnf).",
     "No pending security updates.": "Bekleyen güvenlik güncellemesi yok.",
-    "Installs packages (dnf on RHEL family, apt on Debian/Ubuntu).":
-        "Paket kurar (RHEL ailesinde dnf, Debian/Ubuntu'da apt).",
+    "Installs packages (apt on Debian/Ubuntu, dnf on Fedora/RHEL).":
+        "Paket kurar (Debian/Ubuntu'da apt, Fedora/RHEL'de dnf).",
     "Package names": "Paket adları",
-    "Removes packages (dnf on RHEL family, apt on Debian/Ubuntu).":
-        "Paket kaldırır (RHEL ailesinde dnf, Debian/Ubuntu'da apt).",
-    "Adds/removes a permanent firewalld port or service rule and reloads.":
-        "firewalld'ye kalıcı port veya servis kuralı ekler/kaldırır ve yeniden yükler.",
+    "Removes packages (apt on Debian/Ubuntu, dnf on Fedora/RHEL).":
+        "Paket kaldırır (Debian/Ubuntu'da apt, Fedora/RHEL'de dnf).",
+    "Adds/removes a permanent firewall port or service rule (firewalld or ufw).":
+        "Güvenlik duvarına kalıcı port veya servis kuralı ekler/kaldırır (firewalld veya ufw).",
     "Port/protocol (e.g. 8080/tcp, 3000-3010/udp)": "Port/protokol (örn. 8080/tcp, 3000-3010/udp)",
-    "firewalld service name (e.g. http, https)": "firewalld servis adı (örn. http, https)",
+    "Firewall service name (e.g. http, https)": "Güvenlik duvarı servis adı (örn. http, https)",
     "Reboots the server.": "Sunucuyu yeniden başlatır.",
 
     # --- Panel: layout ---
@@ -266,8 +275,16 @@ TR = {
         "Proxy kullanan sunucular bu adresi görür; onlarda bu adrese izin verin.",
     "The gateway's public IP address could not be determined (outbound access may be blocked).":
         "Gateway'in dış IP adresi belirlenemedi (dışarıya erişim kapalı olabilir).",
-    "Example (RHEL, firewalld):": "Örnek (RHEL, firewalld):",
+    "Example (ufw):": "Örnek (ufw):",
+    "Example (firewalld):": "Örnek (firewalld):",
     "Gateway public IP address:": "Gateway dış IP adresi:",
+    "Distribution": "Dağıtım",
+    "Version": "Sürüm",
+    "distribution not detected yet": "henüz tespit edilmedi",
+    "The server's distribution could not be detected, so this tool cannot be used.":
+        "Sunucunun dağıtımı tespit edilemedi, bu yüzden bu araç kullanılamıyor.",
+    "Package tools support apt and dnf only; this server runs {name}.":
+        "Paket araçları yalnızca apt ve dnf destekler; bu sunucuda {name} çalışıyor.",
     "Refresh": "Yenile",
     "On remote servers, allow this address for Cockpit (9090/tcp) and 22/tcp for the SSH fallback. "
     "Servers on the same local network see the local IP address of the machine running the gateway instead.":
@@ -417,7 +434,7 @@ TR = {
     "Username": "Kullanıcı adı",
     "Gateway password": "Gateway parolası",
     "Wrong gateway password.": "Gateway parolası hatalı.",
-    "RHEL MCP Gateway - Login": "RHEL MCP Gateway - Giriş",
+    "Cockpit MCP Gateway - Login": "Cockpit MCP Gateway - Giriş",
     "Grant Access to MCP Client": "MCP İstemcisine Erişim İzni",
     "<b>{client}</b> wants to access the tools on this gateway.":
         "<b>{client}</b> bu gateway'deki araçlara erişmek istiyor.",

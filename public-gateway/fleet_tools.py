@@ -1,4 +1,4 @@
-"""RHEL yönetimi için amaca özel MCP araçları.
+"""Linux sunucu yönetimi için amaca özel MCP araçları.
 
 Her araç, sunucuda çalıştırılacak sabit komutları (argv listesi) kendisi kurar;
 kullanıcıdan gelen değerler doğrulanır ve shell'e her zaman quote edilerek verilir.
@@ -232,18 +232,80 @@ def parse_apt_upgradable(text: str) -> list[dict]:
     return items
 
 
-async def detect_package_manager(run: Runner) -> str:
-    """Debian/Ubuntu ailesinde "apt", diğerlerinde (RHEL ailesi) "dnf"."""
-    r = await run(["cat", "/etc/os-release"])
-    info = parse_os_release(r.stdout)
-    family = {info.get("ID", "").lower(), *info.get("ID_LIKE", "").lower().split()}
-    return "apt" if family & {"debian", "ubuntu"} else "dnf"
+_APT_FAMILY = {"debian", "ubuntu"}
+_DNF_FAMILY = {"rhel", "fedora", "centos"}
+
+
+def parse_distro(text: str) -> dict | None:
+    """/etc/os-release içeriğinden sunucu kaydına yazılacak dağıtım bilgisi; ID yoksa None."""
+    info = parse_os_release(text)
+    distro_id = info.get("ID", "").lower()
+    if not distro_id:
+        return None
+    family = {distro_id, *info.get("ID_LIKE", "").lower().split()}
+    manager = "apt" if family & _APT_FAMILY else "dnf" if family & _DNF_FAMILY else None
+    return {
+        "id": distro_id,
+        "name": info.get("NAME") or info.get("PRETTY_NAME") or distro_id,
+        # Sürekli güncellenen dağıtımlarda (örn. Arch) sürüm yoktur
+        "version": info.get("VERSION_ID") or info.get("VERSION"),
+        "package_manager": manager,
+    }
+
+
+# Root olmayan kullanıcının PATH'inde /usr/sbin bulunmayabilir; bu yüzden tam yollara bakılır
+_TOOL_PATHS = {
+    "firewalld": "/usr/bin/firewall-cmd",
+    "ufw": "/usr/sbin/ufw",
+    "selinux": "/usr/sbin/getenforce",
+    "apparmor": "/usr/sbin/aa-status",
+}
+
+
+DETECT_TIMEOUT = 10
+
+
+async def detect_distro(run: Runner) -> dict | None:
+    """Dağıtımı ve kurulu güvenlik araçlarını öğrenir; öğrenilemezse None."""
+    r = await run(["cat", "/etc/os-release"], timeout=DETECT_TIMEOUT)
+    distro = parse_distro(r.stdout) if r.exit_status == 0 else None
+    if distro is None:
+        return None
+    # Olmayan dosyalar için ls hata döner; bulunanlar yine stdout'a yazılır
+    listing = await run(["ls", *_TOOL_PATHS.values()], timeout=DETECT_TIMEOUT)
+    if listing.exit_status is None:
+        return None
+    found = set(listing.stdout.split())
+    has = {name: path in found for name, path in _TOOL_PATHS.items()}
+    firewall = "firewalld" if has["firewalld"] else "ufw" if has["ufw"] else None
+    if has["firewalld"] and has["ufw"]:
+        active = await run(["systemctl", "is-active", "firewalld"], timeout=DETECT_TIMEOUT)
+        firewall = "firewalld" if active.stdout.strip() == "active" else "ufw"
+    return {**distro, "firewall": firewall, "selinux": has["selinux"], "apparmor": has["apparmor"]}
+
+
+def detected(distro: dict | None) -> dict:
+    """Kayıtlı bilgi; tespit edilemediyse sunucuda komut denenmez."""
+    if not distro:
+        raise ToolInputError(t("The server's distribution could not be detected, so this tool cannot be used."))
+    return distro
+
+
+def package_manager(distro: dict | None) -> str:
+    """Kayıtlı dağıtıma göre paket yöneticisi; bilinmiyorsa sunucuda komut denenmez."""
+    distro = detected(distro)
+    manager = distro.get("package_manager")
+    if not manager:
+        raise ToolInputError(t("Package tools support apt and dnf only; this server runs {name}.", name=distro.get("name")))
+    return manager
 
 
 # apt-get'in soru sormaması ve değişmiş yapılandırma dosyalarını koruması için
+# unattended-upgrades çalışırken dpkg kilidi hemen hata vermesin diye bir süre beklenir
 _APT_GET = [
     "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-y",
     "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+    "-o", "DPkg::Lock::Timeout=120",
 ]
 
 
@@ -272,6 +334,16 @@ class ToolSpec:
     read_only: bool = True
     # Değiştiren araçlar `confirm: true` olmadan çalışmaz; sadece ne yapılacağını söyler
     preview: Callable[[dict], str] | None = None
+    # Dağıtıma göre davranan araçlar: handler ve preview ek olarak kayıtlı dağıtım bilgisini alır
+    uses_distro: bool = False
+
+    async def execute(self, run: Runner, args: dict, distro: dict | None) -> Any:
+        if self.uses_distro:
+            return await self.handler(run, args, distro)
+        return await self.handler(run, args)
+
+    def describe(self, args: dict, distro: dict | None) -> str:
+        return self.preview(args, distro) if self.uses_distro else self.preview(args)
 
     def to_tool(self) -> types.Tool:
         # Descriptions are translated per request (see i18n), not at import time
@@ -385,16 +457,38 @@ async def network_info(run: Runner, args: dict) -> dict:
     }
 
 
-async def firewall_status(run: Runner, args: dict) -> dict:
+def _no_firewall() -> str:
+    return t("No firewalld or ufw was found on this server.")
+
+
+def _ufw_state(text: str) -> str:
+    """`ufw status` çıktısının "Status: active" satırı."""
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "Status":
+            return value.strip()
+    return ""
+
+
+async def firewall_status(run: Runner, args: dict, distro: dict | None) -> dict:
+    firewall = detected(distro).get("firewall")
+    if firewall is None:
+        return {"firewall": None, "note": _no_firewall()}
+    if firewall == "ufw":
+        r = await run(["ufw", "status", "verbose"], privileged=True)
+        return {"firewall": firewall, "state": _ufw_state(r.stdout) or r.stderr.strip(), "rules": truncate(r.stdout or r.stderr)}
     state = await run(["firewall-cmd", "--state"], privileged=True)
     rules = await run(["firewall-cmd", "--list-all"], privileged=True)
     return {
+        "firewall": firewall,
         "state": (state.stdout or state.stderr).strip(),
         "rules": truncate(rules.stdout or rules.stderr),
     }
 
 
-async def selinux_status(run: Runner, args: dict) -> dict:
+async def selinux_status(run: Runner, args: dict, distro: dict | None) -> dict:
+    if not detected(distro).get("selinux"):
+        return {"selinux": False, "note": t("SELinux is not installed on this server.")}
     mode = await run(["getenforce"])
     denials = await run(["ausearch", "-m", "AVC,USER_AVC", "-ts", "recent", "-i"], privileged=True)
     text = denials.stdout if denials.exit_status == 0 else ""
@@ -404,9 +498,22 @@ async def selinux_status(run: Runner, args: dict) -> dict:
     }
 
 
-async def available_updates(run: Runner, args: dict) -> dict:
+async def apparmor_status(run: Runner, args: dict, distro: dict | None) -> dict:
+    if not detected(distro).get("apparmor"):
+        return {"apparmor": False, "note": t("AppArmor is not installed on this server.")}
+    status = await run(["aa-status"], privileged=True)
+    denials = await run(["journalctl", "-k", "--no-pager", "-o", "short-iso", "--since", "10 minutes ago",
+                         "-g", "apparmor=.DENIED"], privileged=True)
+    text = denials.stdout if denials.exit_status == 0 and "-- No entries --" not in denials.stdout else ""
+    return {
+        "status": truncate(status.stdout or status.stderr),
+        "recent_denials": truncate(text) or t("No AppArmor denials in the last 10 minutes."),
+    }
+
+
+async def available_updates(run: Runner, args: dict, distro: dict | None) -> dict:
     security_only = bool(args.get("security_only"))
-    if await detect_package_manager(run) == "apt":
+    if package_manager(distro) == "apt":
         updates, r = await _apt_upgradable(run)
         if updates is None:
             return {"error": truncate(r.stderr or r.stdout), "exit_status": r.exit_status}
@@ -424,9 +531,9 @@ async def available_updates(run: Runner, args: dict) -> dict:
     return {"package_manager": "dnf", "security_only": security_only, "count": len(updates), "updates": updates}
 
 
-async def package_info(run: Runner, args: dict) -> dict:
+async def package_info(run: Runner, args: dict, distro: dict | None) -> dict:
     name = validate_package(args.get("name"))
-    if await detect_package_manager(run) == "apt":
+    if package_manager(distro) == "apt":
         # Çıktı örneği: "install ok installed 3.0.13-0ubuntu3.4"; kaldırılmış ama
         # yapılandırması kalmış paketler "deinstall ok config-files ..." döner
         status = await run(["dpkg-query", "-W", "--showformat=${Status} ${Version}", name])
@@ -465,9 +572,9 @@ async def service_action(run: Runner, args: dict) -> dict:
     return out
 
 
-async def install_updates(run: Runner, args: dict) -> dict:
+async def install_updates(run: Runner, args: dict, distro: dict | None) -> dict:
     security_only = bool(args.get("security_only"))
-    if await detect_package_manager(run) == "apt":
+    if package_manager(distro) == "apt":
         updates, r = await _apt_upgradable(run)
         if updates is None:
             return result_dict(r)
@@ -501,8 +608,7 @@ async def _dpkg_installed(run: Runner, name: str) -> bool:
 _APT_OPPOSITE_SUFFIX = {"install": "-", "remove": "+"}
 
 
-async def _package_change(run: Runner, action: str, names: list[str]) -> dict:
-    manager = await detect_package_manager(run)
+async def _package_change(run: Runner, action: str, names: list[str], manager: str) -> dict:
     if manager == "apt":
         suffix = _APT_OPPOSITE_SUFFIX[action]
         for name in names:
@@ -515,32 +621,68 @@ async def _package_change(run: Runner, action: str, names: list[str]) -> dict:
     return out
 
 
-async def package_install(run: Runner, args: dict) -> dict:
-    return await _package_change(run, "install", validate_packages(args.get("names")))
+async def package_install(run: Runner, args: dict, distro: dict | None) -> dict:
+    return await _package_change(run, "install", validate_packages(args.get("names")), package_manager(distro))
 
 
-async def package_remove(run: Runner, args: dict) -> dict:
-    return await _package_change(run, "remove", validate_packages(args.get("names")))
+async def package_remove(run: Runner, args: dict, distro: dict | None) -> dict:
+    return await _package_change(run, "remove", validate_packages(args.get("names")), package_manager(distro))
 
 
-def _firewall_target(args: dict) -> str:
+def _firewall_request(args: dict) -> tuple[str, str | None, str | None]:
+    """Doğrulanmış (eylem, port, servis); port ve servisten yalnızca biri doludur."""
     port, service = args.get("port"), args.get("service")
     if bool(port) == bool(service):
         raise ToolInputError(t("Exactly one of the port or service parameters must be given."))
     if args.get("action") not in ("add", "remove"):
         raise ToolInputError(t("Invalid action: {value}", value=repr(args.get("action"))))
     if port:
-        return f"--{args['action']}-port={validate_port(port)}"
-    return f"--{args['action']}-service={_check(_FW_SERVICE_RE, service, N('firewalld service name'))}"
+        return args["action"], validate_port(port), None
+    return args["action"], None, _check(_FW_SERVICE_RE, service, N("firewall service name"))
 
 
-async def firewall_rule(run: Runner, args: dict) -> dict:
-    target = _firewall_target(args)
-    change = await run(["firewall-cmd", "--permanent", target], privileged=True)
+def _firewalld_target(args: dict) -> str:
+    action, port, service = _firewall_request(args)
+    return f"--{action}-port={port}" if port else f"--{action}-service={service}"
+
+
+def _ufw_argv(args: dict) -> list[str]:
+    action, port, service = _firewall_request(args)
+    # ufw port aralığını iki nokta ile yazar: 3000:3010/udp
+    target = port.replace("-", ":") if port else service
+    return ["ufw", "allow", target] if action == "add" else ["ufw", "delete", "allow", target]
+
+
+def _firewall_preview(args: dict, distro: dict | None) -> str:
+    firewalld = f"firewall-cmd --permanent {_firewalld_target(args)} && firewall-cmd --reload"
+    ufw = " ".join(_ufw_argv(args))
+    # Güvenlik duvarı henüz öğrenilmediyse ikisi de gösterilir
+    return {"firewalld": firewalld, "ufw": ufw}.get((distro or {}).get("firewall"), f"{ufw} | {firewalld}")
+
+
+async def _ufw_rule(run: Runner, args: dict) -> dict:
+    # Kurallar hemen uygulanır, yeniden yükleme gerekmez. ufw kapalıysa açılmaz: sunucuya erişim kesilebilir
+    out = result_dict(await run(_ufw_argv(args), privileged=True))
+    if out["exit_status"] == 0:
+        status = await run(["ufw", "status"], privileged=True)
+        out["state"] = _ufw_state(status.stdout)
+        if out["state"] == "inactive":
+            out["note"] = t("ufw is inactive, so the rule takes effect only after it is enabled. The gateway does not enable ufw.")
+    return out
+
+
+async def firewall_rule(run: Runner, args: dict, distro: dict | None) -> dict:
+    firewall = detected(distro).get("firewall")
+    if firewall is None:
+        raise ToolInputError(_no_firewall())
+    if firewall == "ufw":
+        return {"firewall": firewall, **await _ufw_rule(run, args)}
+    change = await run(["firewall-cmd", "--permanent", _firewalld_target(args)], privileged=True)
     if change.exit_status != 0:
         return result_dict(change)
     reload = await run(["firewall-cmd", "--reload"], privileged=True)
     out = result_dict(change)
+    out["firewall"] = firewall
     out["reload"] = result_dict(reload)
     return out
 
@@ -555,6 +697,11 @@ async def reboot_server(run: Runner, args: dict) -> dict:
 def _names(args: dict) -> str:
     names = args.get("names")
     return ", ".join(names) if isinstance(names, list) else str(names)
+
+
+def _for_manager(distro: dict | None, apt: str, dnf: str) -> str:
+    # Dağıtım henüz öğrenilmediyse ikisi de gösterilir
+    return {"apt": apt, "dnf": dnf}.get((distro or {}).get("package_manager"), f"{apt} | {dnf}")
 
 
 TOOLS: list[ToolSpec] = [
@@ -607,25 +754,30 @@ TOOLS: list[ToolSpec] = [
     ),
     ToolSpec(
         "firewall_status",
-        "Returns the firewalld state and active rules.",
-        {}, firewall_status,
+        "Returns the firewall state and active rules (firewalld or ufw).",
+        {}, firewall_status, uses_distro=True,
     ),
     ToolSpec(
         "selinux_status",
         "Returns the SELinux mode and recent SELinux (AVC) denials.",
-        {}, selinux_status,
+        {}, selinux_status, uses_distro=True,
+    ),
+    ToolSpec(
+        "apparmor_status",
+        "Returns the AppArmor profile status and recent AppArmor denials (Debian/Ubuntu).",
+        {}, apparmor_status, uses_distro=True,
     ),
     ToolSpec(
         "available_updates",
-        "Lists pending package updates (dnf on RHEL family, apt on Debian/Ubuntu).",
+        "Lists pending package updates (apt on Debian/Ubuntu, dnf on Fedora/RHEL).",
         {"security_only": {"type": "boolean", "description": "Security updates only"}},
-        available_updates,
+        available_updates, uses_distro=True,
     ),
     ToolSpec(
         "package_info",
-        "Returns whether a package is installed, its version and its package info (dnf on RHEL family, apt on Debian/Ubuntu).",
+        "Returns whether a package is installed, its version and its package info (apt on Debian/Ubuntu, dnf on Fedora/RHEL).",
         {"name": {"type": "string", "description": "Package name"}},
-        package_info, required=["name"],
+        package_info, required=["name"], uses_distro=True,
     ),
     ToolSpec(
         "service_action",
@@ -639,38 +791,39 @@ TOOLS: list[ToolSpec] = [
     ),
     ToolSpec(
         "install_updates",
-        "Installs package updates (dnf on RHEL family, apt on Debian/Ubuntu).",
+        "Installs package updates (apt on Debian/Ubuntu, dnf on Fedora/RHEL).",
         {"security_only": {"type": "boolean", "description": "Security updates only"}},
-        install_updates, read_only=False,
-        preview=lambda a: (
-            "dnf -y upgrade --security | apt-get update && apt-get -y install --only-upgrade <security packages>"
-            if a.get("security_only") else "dnf -y upgrade | apt-get update && apt-get -y upgrade --with-new-pkgs"
+        install_updates, read_only=False, uses_distro=True,
+        preview=lambda a, distro: (
+            _for_manager(distro, "apt-get update && apt-get -y install --only-upgrade <security packages>", "dnf -y upgrade --security")
+            if a.get("security_only")
+            else _for_manager(distro, "apt-get update && apt-get -y upgrade --with-new-pkgs", "dnf -y upgrade")
         ),
     ),
     ToolSpec(
         "package_install",
-        "Installs packages (dnf on RHEL family, apt on Debian/Ubuntu).",
+        "Installs packages (apt on Debian/Ubuntu, dnf on Fedora/RHEL).",
         {"names": {"type": "array", "items": {"type": "string"}, "description": "Package names"}},
-        package_install, required=["names"], read_only=False,
-        preview=lambda a: f"dnf -y install {_names(a)} | apt-get -y install {_names(a)}",
+        package_install, required=["names"], read_only=False, uses_distro=True,
+        preview=lambda a, distro: _for_manager(distro, f"apt-get -y install {_names(a)}", f"dnf -y install {_names(a)}"),
     ),
     ToolSpec(
         "package_remove",
-        "Removes packages (dnf on RHEL family, apt on Debian/Ubuntu).",
+        "Removes packages (apt on Debian/Ubuntu, dnf on Fedora/RHEL).",
         {"names": {"type": "array", "items": {"type": "string"}, "description": "Package names"}},
-        package_remove, required=["names"], read_only=False,
-        preview=lambda a: f"dnf -y remove {_names(a)} | apt-get -y remove {_names(a)}",
+        package_remove, required=["names"], read_only=False, uses_distro=True,
+        preview=lambda a, distro: _for_manager(distro, f"apt-get -y remove {_names(a)}", f"dnf -y remove {_names(a)}"),
     ),
     ToolSpec(
         "firewall_rule",
-        "Adds/removes a permanent firewalld port or service rule and reloads.",
+        "Adds/removes a permanent firewall port or service rule (firewalld or ufw).",
         {
             "action": {"type": "string", "enum": ["add", "remove"]},
             "port": {"type": "string", "description": "Port/protocol (e.g. 8080/tcp, 3000-3010/udp)"},
-            "service": {"type": "string", "description": "firewalld service name (e.g. http, https)"},
+            "service": {"type": "string", "description": "Firewall service name (e.g. http, https)"},
         },
-        firewall_rule, required=["action"], read_only=False,
-        preview=lambda a: f"firewall-cmd --permanent {_firewall_target(a)} && firewall-cmd --reload",
+        firewall_rule, required=["action"], read_only=False, uses_distro=True,
+        preview=_firewall_preview,
     ),
     ToolSpec(
         "reboot_server",
