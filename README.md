@@ -22,6 +22,8 @@ docker compose pull
 docker compose up -d --no-build
 ```
 
+Images for `linux/amd64` and `linux/arm64` are published to `ghcr.io/bmericc/cockpit-mcp-gateway` and Docker Hub (`bmericc/cockpit-mcp-gateway`).
+
 The gateway listens on port `7435`. Put a reverse proxy that terminates HTTPS (nginx, Caddy etc.) in front of it; `X-Forwarded-*` headers are honoured only from the addresses in `TRUSTED_PROXIES`. `docker-compose.yml` publishes the port on `127.0.0.1` only; set `BIND_ADDRESS` to change that.
 
 Cockpit must be installed and running on the target servers:

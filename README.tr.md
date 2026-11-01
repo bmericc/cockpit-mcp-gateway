@@ -22,6 +22,8 @@ docker compose pull
 docker compose up -d --no-build
 ```
 
+`linux/amd64` ve `linux/arm64` imajları `ghcr.io/bmericc/cockpit-mcp-gateway` ve Docker Hub'da (`bmericc/cockpit-mcp-gateway`) yayınlanır.
+
 Gateway `7435` portunda çalışır. Önüne HTTPS sonlandıran bir reverse proxy (nginx, Caddy vb.) koyun; `X-Forwarded-*` başlıkları yalnızca `TRUSTED_PROXIES` adreslerinden kabul edilir. `docker-compose.yml` portu yalnızca `127.0.0.1` üzerinde açar; değiştirmek için `BIND_ADDRESS` tanımlayın.
 
 Hedef sunucularda Cockpit kurulu ve çalışır olmalı:
