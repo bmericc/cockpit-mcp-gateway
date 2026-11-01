@@ -61,7 +61,7 @@ async def test_superuser(cockpit):
     async with session(cockpit) as s:
         r = await s.spawn(["id", "-u"], superuser=True)
     assert r.stdout == "0\n"
-    assert cockpit.fake.opened[0]["superuser"] == "require"
+    assert cockpit.fake.opened[-1]["superuser"] == "require"
 
 
 async def test_superuser_denied_without_sudo(cockpit):
@@ -155,8 +155,8 @@ async def test_run_remote_command_over_cockpit(cockpit, servers_file, ssh):
     })).content[0].text
     assert "Via: cockpit" in text
     assert "sh:uptime" in text
-    assert cockpit.fake.opened[0]["spawn"] == ["sh", "-c", "uptime"]
-    assert cockpit.fake.opened[0]["superuser"] == "require"
+    assert cockpit.fake.opened[-1]["spawn"] == ["sh", "-c", "uptime"]
+    assert cockpit.fake.opened[-1]["superuser"] == "require"
 
 
 async def test_falls_back_to_ssh_when_cockpit_unreachable(servers_file, ssh):
@@ -164,7 +164,7 @@ async def test_falls_back_to_ssh_when_cockpit_unreachable(servers_file, ssh):
     text = (await call("run_remote_command", {"server_name": "box", "command": "uptime", "confirm": True})).content[0].text
     assert "Via: ssh" in text
     assert "Cockpit was unavailable" in text
-    assert ssh == ["uptime"]
+    assert ssh[-1] == "uptime"
 
 
 async def test_falls_back_to_ssh_on_wrong_password(cockpit, servers_file, ssh):

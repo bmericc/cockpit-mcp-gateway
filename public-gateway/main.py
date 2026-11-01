@@ -38,7 +38,15 @@ from pydantic import AnyHttpUrl
 from mcp.server.auth.routes import create_auth_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Arka planda çalışır: ulaşılamayan sunucular gateway'in açılmasını bekletmesin
+    migration = asyncio.create_task(migrate_servers())
+    yield
+    migration.cancel()
+    await asyncio.gather(migration, return_exceptions=True)
+
+app = FastAPI(lifespan=lifespan)
 
 SECRET_KEY = os.getenv("SECRET_KEY", "gizli-anahtar")
 # Gateway'in dışarıdan erişilen adresi (OAuth yönlendirmeleri ve metadata için)
@@ -326,6 +334,38 @@ def _recorded(run: fleet_tools.Runner) -> fleet_tools.Runner:
         return result
     return wrapper
 
+DISTRO_FIELDS = ("version", "firewall", "selinux", "apparmor")
+
+def needs_distro(cfg: Dict[str, Any]) -> bool:
+    """Dağıtım bilgisi hiç yoksa ya da alanları eksikse (eski biçim) True."""
+    distro = cfg.get("distro") or {}
+    return any(field not in distro for field in DISTRO_FIELDS)
+
+def remember_distro(server_name: str, distro: Dict[str, Any]) -> None:
+    servers = load_servers()
+    if server_name in servers:
+        servers[server_name]["distro"] = distro
+        save_servers(servers)
+
+async def refresh_distro(server_name: str, cfg: Dict[str, Any], run: fleet_tools.Runner) -> Dict[str, Any] | None:
+    """Dağıtımı sunucudan okur, kayıttan farklıysa günceller.
+
+    Okunamazsa kayıtlı bilgiyle devam edilir: asıl işlem bu yüzden engellenmesin.
+    """
+    try:
+        distro = await fleet_tools.detect_distro(run)
+    except Exception:
+        distro = None
+    if distro and distro != cfg.get("distro"):
+        remember_distro(server_name, distro)
+    return distro or cfg.get("distro")
+
+@asynccontextmanager
+async def connect_server(server_name: str, cfg: Dict[str, Any]):
+    """open_runner + her bağlantıda dağıtım kontrolü. (runner, bağlantı bilgisi, dağıtım) döner."""
+    async with open_runner(cfg) as (run, info):
+        yield run, info, await refresh_distro(server_name, cfg, run)
+
 def request_actor(request: Request) -> Dict[str, Any]:
     return {"ip": request.client.host if request.client else None}
 
@@ -469,7 +509,7 @@ def text_result(value: Any) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=fleet_tools.to_text(value))]
 
 # --- MCP Sunucu Tanımları ---
-mcp_server = Server("rhel-fleet-gateway")
+mcp_server = Server("cockpit-mcp-gateway")
 
 def server_name_prop() -> dict:
     return {"server_name": {"type": "string", "description": t("Registered server name (e.g. prod-db)")}}
@@ -479,7 +519,7 @@ async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="list_servers",
-            description=t("Lists all registered RHEL servers (without passwords) and whether a Cockpit login is configured."),
+            description=t("Lists all registered servers (without passwords) and whether a Cockpit login is configured."),
             inputSchema={"type": "object", "properties": {}},
             annotations=types.ToolAnnotations(readOnlyHint=True, openWorldHint=False),
         ),
@@ -518,15 +558,15 @@ def confirmation_required(server_name: str, action: str) -> list[types.TextConte
     ))
 
 async def fleet_health(servers: Dict[str, Dict[str, Any]]) -> dict:
-    async def one(cfg):
+    async def one(name, cfg):
         try:
-            async with open_runner(cfg) as (run, info):
+            async with connect_server(name, cfg) as (run, info, _):
                 return {**await fleet_tools.fleet_health_for(run), "connection": info}
         except Exception as e:
             return {"error": str(e)}
 
     names = list(servers)
-    results = await asyncio.gather(*(one(servers[n]) for n in names))
+    results = await asyncio.gather(*(one(n, servers[n]) for n in names))
     return dict(zip(names, results))
 
 @mcp_server.call_tool()
@@ -579,7 +619,7 @@ async def _call_tool(name: str, arguments: dict) -> tuple[list[types.TextContent
             command = arguments.get("command")
             if not arguments.get("confirm"):
                 return confirmation_required(server_name, command), "preview"
-            async with open_runner(cfg) as (run, info):
+            async with connect_server(server_name, cfg) as (run, info, _):
                 result = await run(command, privileged=bool(arguments.get("as_root")))
             output = f"User: {result.user}\nVia: {result.via}\nExit Status: {result.exit_status}\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}"
             if info.get("cockpit_error"):
@@ -587,10 +627,10 @@ async def _call_tool(name: str, arguments: dict) -> tuple[list[types.TextContent
             return text_result(output), "ok"
 
         if not spec.read_only and not arguments.get("confirm"):
-            return confirmation_required(server_name, spec.preview(arguments)), "preview"
+            return confirmation_required(server_name, spec.describe(arguments, cfg.get("distro"))), "preview"
 
-        async with open_runner(cfg) as (run, info):
-            value = await spec.handler(run, arguments)
+        async with connect_server(server_name, cfg) as (run, info, distro):
+            value = await spec.execute(run, arguments, distro)
         if isinstance(value, dict):
             value["connection"] = info
         return text_result(value), "ok"
@@ -660,7 +700,7 @@ def navbar(user: str | None, active: str = "") -> str:
     </div>"""
     return f"""<nav class="navbar navbar-expand-md navbar-dark bg-dark mb-4">
   <div class="container">
-    <a class="navbar-brand" href="/">RHEL MCP Gateway</a>{menu}
+    <a class="navbar-brand" href="/">Cockpit MCP Gateway</a>{menu}
   </div>
 </nav>"""
 
@@ -672,7 +712,7 @@ def render_page(title: str, body: str, status_code: int = 200, user: str | None 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{html.escape(title)} · RHEL MCP Gateway</title>
+  <title>{html.escape(title)} · Cockpit MCP Gateway</title>
   {PAGE_STYLE}
 </head>
 <body class="bg-body-tertiary">
@@ -761,9 +801,11 @@ def public_ip_html(ips: Dict[str, str | None], proxy_ips: Dict[str, str | None] 
     v4 = ips.get("ipv4")
     example = ""
     if v4:
-        rule = (f"firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"{v4}\" "
-                f"port port=\"9090\" protocol=\"tcp\" accept' && firewall-cmd --reload")
-        example = f"<br>{t('Example (RHEL, firewalld):')} <code>{html.escape(rule)}</code>"
+        ufw_rule = f"ufw allow from {v4} to any port 9090 proto tcp"
+        firewalld_rule = (f"firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"{v4}\" "
+                          f"port port=\"9090\" protocol=\"tcp\" accept' && firewall-cmd --reload")
+        example = (f"<br>{t('Example (ufw):')} <code>{html.escape(ufw_rule)}</code>"
+                   f"<br>{t('Example (firewalld):')} <code>{html.escape(firewalld_rule)}</code>")
     note = t("On remote servers, allow this address for Cockpit (9090/tcp) and 22/tcp for the SSH fallback. "
              "Servers on the same local network see the local IP address of the machine running the gateway instead.")
     return proxy_html + (
@@ -842,6 +884,40 @@ async def check_server(cfg: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": True, "via": "ssh", "message": t("SSH connection successful."), "at": checked_at}
     return {"ok": False, "via": None, "message": ssh_error, "at": checked_at}
 
+async def detect_server_distro(cfg: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Bağlantısı doğrulanmış sunucunun dağıtımı; öğrenilemezse ilk kullanımda yeniden denenir."""
+    try:
+        async with open_runner(cfg) as (run, _):
+            return await fleet_tools.detect_distro(run)
+    except Exception:
+        return None
+
+MIGRATION_CONCURRENCY = 10
+
+async def migrate_servers() -> None:
+    """Eski sürümlerden kalan kayıtlara dağıtım ve sürüm bilgisini ekler.
+
+    Yalnızca eksik kayıtlara dokunur, her açılışta güvenle çalışır. Ulaşılamayan sunucular
+    ilk paket aracı çağrısında, Test düğmesiyle ya da sonraki açılışta tamamlanır.
+    """
+    pending = {name: cfg for name, cfg in load_servers().items() if needs_distro(cfg)}
+    if not pending:
+        return
+    limit = asyncio.Semaphore(MIGRATION_CONCURRENCY)
+
+    async def one(name: str, cfg: Dict[str, Any]) -> str | None:
+        async with limit:
+            distro = await detect_server_distro(cfg)
+        if distro is None:
+            return name
+        remember_distro(name, distro)
+        return None
+
+    results = await asyncio.gather(*(one(name, cfg) for name, cfg in pending.items()))
+    failed = [name for name in results if name]
+    audit_log.record("system", "distro_migration", "error" if failed else "ok",
+                     args={"servers": list(pending), "failed": failed})
+
 def server_row(cfg: Dict[str, Any]) -> str:
     e = lambda v: html.escape(str(v)) if v not in (None, "") else "—"
     name = cfg["name"]
@@ -860,8 +936,11 @@ def server_row(cfg: Dict[str, Any]) -> str:
     else:
         status = f"<span class='note'>{t('Not tested')}</span>"
     quoted = html.escape(name)
+    distro = cfg.get("distro") or {}
+    distro_name = distro.get("name") or t("distribution not detected yet")
     return (
-        f"<tr><td><b>{e(name)}</b><br><span class='note'>{e(proxy_label(cfg))}</span></td><td>{cockpit}</td><td>{ssh}</td><td>{status}</td>"
+        f"<tr><td><b>{e(name)}</b><br><span class='note'>{e(proxy_label(cfg))}</span></td>"
+        f"<td>{e(distro_name)}</td><td>{e(distro.get('version'))}</td><td>{cockpit}</td><td>{ssh}</td><td>{status}</td>"
         f"<td><form method='post' action='/servers/{quoted}/test'><button class='btn btn-sm btn-outline-primary'>{t('Test')}</button></form> "
         f"<form method='post' action='/servers/{quoted}/delete' "
         f"onsubmit=\"return confirm('{t('Delete {name}?', name=quoted)}')\"><button class='btn btn-sm btn-outline-danger'>{t('Delete')}</button></form></td></tr>"
@@ -874,7 +953,7 @@ async def index(request: Request, error: str = "", info: str = ""):
         return RedirectResponse(url="/login", status_code=303)
 
     servers = load_servers()
-    rows = "".join(server_row(cfg) for cfg in servers.values()) or f"<tr><td colspan='5'>{t('No servers defined yet.')}</td></tr>"
+    rows = "".join(server_row(cfg) for cfg in servers.values()) or f"<tr><td colspan='7'>{t('No servers defined yet.')}</td></tr>"
     error_html = f"<div class='alert alert-danger'>{html.escape(error)}</div>" if error else ""
     info_html = f"<div class='alert alert-success'>{html.escape(info)}</div>" if info else ""
     key_rows = "".join(shared_key_row(k) for k in load_shared_keys().values()) or \
@@ -905,7 +984,7 @@ async def index(request: Request, error: str = "", info: str = ""):
 
         <div class="card mb-4"><div class="card-header">{t("Registered Servers")}</div><div class="card-body">
         <div class="table-responsive"><table class="table table-sm table-bordered table-hover align-middle bg-body mb-0">
-          <tr><th>{t("Name")}</th><th>Cockpit</th><th>{t("SSH (fallback)")}</th><th>{t("Connection status")}</th><th></th></tr>
+          <tr><th>{t("Name")}</th><th>{t("Distribution")}</th><th>{t("Version")}</th><th>Cockpit</th><th>{t("SSH (fallback)")}</th><th>{t("Connection status")}</th><th></th></tr>
           {rows}
         </table></div>
         </div></div>
@@ -1039,6 +1118,8 @@ async def save_server(request: Request):
     if not check["ok"]:
         return _redirect_error(t("'{name}' was not saved, could not connect: {message}", name=name, message=check["message"]))
     cfg["last_check"] = check
+    if distro := await detect_server_distro(cfg):
+        cfg["distro"] = distro
     # Kontrol sürerken dosya değişmiş olabilir; en güncel hâli üzerine yaz
     servers = load_servers()
     servers[name] = cfg
@@ -1070,9 +1151,12 @@ async def test_server(name: str, request: Request):
     check = await check_server(cfg)
     audit_web(request, "server_test", "ok" if check["ok"] else "error", server=name,
               via=check.get("via"), result=check["message"])
+    distro = await detect_server_distro(cfg) if check["ok"] else None
     servers = load_servers()
     if name in servers:
         servers[name]["last_check"] = check
+        if distro:
+            servers[name]["distro"] = distro
         save_servers(servers)
     if check["ok"] and not check.get("warning"):
         return _redirect_info(f"'{name}': {check['message']}")
@@ -1136,7 +1220,7 @@ async def generate_shared_key(request: Request):
     keys = load_shared_keys()
     if name in keys:
         return _redirect_error(t("A key named '{name}' already exists.", name=name))
-    key = asyncssh.generate_private_key("ssh-ed25519", comment=f"rhel-mcp-gateway:{name}")
+    key = asyncssh.generate_private_key("ssh-ed25519", comment=f"cockpit-mcp-gateway:{name}")
     keys[name] = shared_key_entry(name, key)
     save_shared_keys(keys)
     audit_web(request, "ssh_key_generate", args={"name": name, "fingerprint": keys[name]["fingerprint"]})
@@ -1270,7 +1354,7 @@ def _token_fields(url_token: str | None) -> tuple[bool, Dict[str, str]]:
 @app.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request, token: str | None = None):
     ask_token, hidden = _token_fields(token)
-    return login_page("/login", t("RHEL MCP Gateway - Login"), hidden=hidden, ask_token=ask_token)
+    return login_page("/login", t("Cockpit MCP Gateway - Login"), hidden=hidden, ask_token=ask_token)
 
 @app.post("/login")
 async def login_submit(request: Request):
@@ -1280,7 +1364,7 @@ async def login_submit(request: Request):
     error = t(TOKEN_ERROR) if not login_token_ok(form.get("token")) else await authenticator.login(username, form.get("password") or "")
     if error:
         audit_web(request, "login", "error", user=username, result=error)
-        return login_page("/login", t("RHEL MCP Gateway - Login"), error=error, status_code=401, ask_token=bool(MCP_API_KEY))
+        return login_page("/login", t("Cockpit MCP Gateway - Login"), error=error, status_code=401, ask_token=bool(MCP_API_KEY))
     request.session['user'] = {"username": username}
     audit_web(request, "login")
     return RedirectResponse(url='/', status_code=303)
@@ -1415,7 +1499,7 @@ async def protected_resource_metadata(request: Request):
         "authorization_servers": [PUBLIC_URL + "/"],
         "scopes_supported": [auth.SCOPE],
         "bearer_methods_supported": ["header"],
-        "resource_name": "RHEL MCP Gateway",
+        "resource_name": "Cockpit MCP Gateway",
     }, headers=cors)
 
 app.routes.append(Route("/.well-known/oauth-protected-resource/sse", endpoint=protected_resource_metadata,

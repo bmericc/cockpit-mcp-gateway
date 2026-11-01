@@ -92,6 +92,10 @@ class FakeCockpit:
             out, status, err = "partial\n", 3, "err\n"
         elif cmd == "sh":
             out, status, err = f"sh:{argv[2]}\n", 0, ""
+        elif cmd == "ls":
+            out, status, err = "/usr/sbin/aa-status\n/usr/sbin/ufw\n", 2, "ls: cannot access '/usr/bin/firewall-cmd'\n"
+        elif argv == ["cat", "/etc/os-release"]:
+            out, status, err = 'NAME="Debian GNU/Linux"\nVERSION_ID="12"\nID=debian\n', 0, ""
         else:
             out, status, err = " ".join(argv) + "\n", 0, ""
         # Gerçek cockpit büyük çıktıyı parça parça gönderir

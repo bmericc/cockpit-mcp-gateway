@@ -40,6 +40,7 @@ def client(monkeypatch, servers_file):
 def test_panel_shows_public_ip_and_firewall_example(client, fake_lookup):
     page = client.get("/").text
     assert "Gateway public IP address: <code>203.0.113.7</code>" in page
+    assert "ufw allow from 203.0.113.7 to any port 9090 proto tcp" in page
     assert "source address=&quot;203.0.113.7&quot;" in page
     assert "9090/tcp" in page
 

@@ -1,19 +1,19 @@
-# RHEL MCP Gateway — Technical Overview
+# Cockpit MCP Gateway — Technical Overview
 
 **English** · [Türkçe](genel-bakis.md)
 
-![RHEL MCP Gateway](images/cover.png)
+![Cockpit MCP Gateway](images/cover.png)
 
 | | |
 | --- | --- |
 | **Document type** | Product and architecture overview |
 | **Scope** | The `public-gateway` component |
 | **License** | GNU GPL v3 |
-| **Source code** | <https://github.com/bmericc/rhel-mcp-gateway> |
+| **Source code** | <https://github.com/bmericc/cockpit-mcp-gateway> |
 
 ## 1. Executive summary
 
-RHEL MCP Gateway is an open-source middle layer that lets AI assistants manage fleets of Linux servers in a secure and controlled way. It brings together the **Cockpit** management interface already used on the servers and the **Model Context Protocol (MCP)**, the common standard of AI clients.
+Cockpit MCP Gateway is an open-source middle layer that lets AI assistants manage fleets of Linux servers in a secure and controlled way. It brings together the **Cockpit** management interface already used on the servers and the **Model Context Protocol (MCP)**, the common standard of AI clients.
 
 System administrators can query the state of servers, services, logs and updates in natural language and have changes carried out through a confirmation mechanism. The solution does not require installing an extra agent or plugin on the servers; it uses the existing Cockpit and SSH infrastructure.
 
@@ -30,7 +30,7 @@ The purpose of the gateway is to offer MCP-compatible clients (Claude, Claude Co
 
 **In scope:**
 
-- Reading server state: system information, resource usage, services, logs, network, firewall, SELinux, updates.
+- Reading server state: system information, resource usage, services, logs, network, firewall, SELinux/AppArmor, updates.
 - Confirmed changes: service management, package installation and removal, updates, firewall rules, reboot, arbitrary commands.
 - A web panel for managing the server inventory.
 
@@ -117,8 +117,9 @@ The gateway works with the privileges of the Cockpit account defined for each se
 | `read_logs` | `journalctl` (unit, time, priority and search filter) |
 | `top_processes` | Processes consuming the most resources |
 | `network_info` | IP addresses, routes, listening ports |
-| `firewall_status` | firewalld state and rules |
+| `firewall_status` | Firewall (`firewalld` or `ufw`) state and rules |
 | `selinux_status` | SELinux mode and recent denials |
+| `apparmor_status` | AppArmor profile status and recent denials |
 | `available_updates` | Pending (security) updates |
 | `package_info` | Package installation state and version |
 
@@ -129,13 +130,13 @@ The gateway works with the privileges of the Cockpit account defined for each se
 | `service_action` | Start, stop, restart, reload, enable, disable a service |
 | `install_updates` | Install package updates (optionally security only) |
 | `package_install` / `package_remove` | Install and remove packages |
-| `firewall_rule` | Add/remove a permanent port or service rule |
+| `firewall_rule` | Add/remove a permanent port or service rule (`firewalld` or `ufw`) |
 | `reboot_server` | Reboot the server |
 | `run_remote_command` | Arbitrary command (optionally with administrator privileges) |
 
 Change tools are not executed without the `confirm: true` parameter; in that case only a preview of the operation is returned.
 
-> The package tools (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`) support both `dnf` (RHEL family) and `apt` (Debian/Ubuntu), chosen from `/etc/os-release`. The firewall tools are designed for the RHEL family (`firewalld`); on other distributions these operations can be done with `run_remote_command`.
+> The package tools (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`) support both `apt` (Debian/Ubuntu) and `dnf` (Fedora/RHEL). The distribution is read from `/etc/os-release` on every connection and stored with the server. The firewall tools use whichever of `firewalld` and `ufw` is installed, checked on every connection. `firewall_rule` never enables `ufw`.
 
 ## 6. Security
 
@@ -176,8 +177,8 @@ Change tools are not executed without the `confirm: true` parameter; in that cas
 **Installation:**
 
 ```bash
-git clone https://github.com/bmericc/rhel-mcp-gateway
-cd rhel-mcp-gateway
+git clone https://github.com/bmericc/cockpit-mcp-gateway
+cd cockpit-mcp-gateway
 cp sample.env .env      # edit the configuration values
 docker compose up -d --build
 ```

@@ -78,7 +78,7 @@ async def test_tool_call_is_logged_with_commands(servers_file, sample_server, fa
     assert (entry["source"], entry["action"], entry["status"]) == ("mcp", "run_remote_command", "ok")
     assert (entry["user"], entry["ip"], entry["server"]) == ("admin", "203.0.113.7", "prod-db")
     assert entry["args"] == {"confirm": True, "command": "systemctl status nginx", "as_root": True}
-    assert entry["commands"] == [{"command": "systemctl status nginx", "as_root": True, "user": "admin",
+    assert entry["commands"][-1:] == [{"command": "systemctl status nginx", "as_root": True, "user": "admin",
                                   "via": "ssh", "exit_status": 0}]
     assert "active (running)" in entry["result"]
     assert isinstance(entry["duration_ms"], int)

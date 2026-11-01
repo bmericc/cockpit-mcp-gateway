@@ -1,19 +1,19 @@
-# RHEL MCP Gateway — Teknik Genel Bakış
+# Cockpit MCP Gateway — Teknik Genel Bakış
 
 [English](overview.md) · **Türkçe**
 
-![RHEL MCP Gateway](images/kapak.png)
+![Cockpit MCP Gateway](images/kapak.png)
 
 | | |
 | --- | --- |
 | **Belge türü** | Ürün ve mimari genel bakış |
 | **Kapsam** | `public-gateway` bileşeni |
 | **Lisans** | GNU GPL v3 |
-| **Kaynak kod** | <https://github.com/bmericc/rhel-mcp-gateway> |
+| **Kaynak kod** | <https://github.com/bmericc/cockpit-mcp-gateway> |
 
 ## 1. Yönetici özeti
 
-RHEL MCP Gateway, Linux sunucu filolarının yapay zekâ asistanları tarafından güvenli ve denetimli biçimde yönetilmesini sağlayan açık kaynaklı bir ara katmandır. Sunucularda zaten kullanılan **Cockpit** yönetim arayüzünü, yapay zekâ istemcilerinin ortak standardı olan **Model Context Protocol (MCP)** ile buluşturur.
+Cockpit MCP Gateway, Linux sunucu filolarının yapay zekâ asistanları tarafından güvenli ve denetimli biçimde yönetilmesini sağlayan açık kaynaklı bir ara katmandır. Sunucularda zaten kullanılan **Cockpit** yönetim arayüzünü, yapay zekâ istemcilerinin ortak standardı olan **Model Context Protocol (MCP)** ile buluşturur.
 
 Böylece sistem yöneticileri sunucuların durumunu, servisleri, logları ve güncellemeleri doğal dille sorgulayabilir, değişiklik gerektiren işlemleri onay mekanizmasıyla yaptırabilir. Çözüm, sunuculara ek ajan veya eklenti kurulmasını gerektirmez; mevcut Cockpit ve SSH altyapısını kullanır.
 
@@ -30,7 +30,7 @@ Gateway'in amacı, MCP uyumlu istemcilere (Claude, Claude Code vb.) kayıtlı Li
 
 **Kapsam içinde:**
 
-- Sunucu durumunun okunması: sistem bilgisi, kaynak kullanımı, servisler, loglar, ağ, güvenlik duvarı, SELinux, güncellemeler.
+- Sunucu durumunun okunması: sistem bilgisi, kaynak kullanımı, servisler, loglar, ağ, güvenlik duvarı, SELinux/AppArmor, güncellemeler.
 - Onaylı değişiklikler: servis yönetimi, paket kurulumu ve kaldırılması, güncelleme, güvenlik duvarı kuralları, yeniden başlatma, serbest komut.
 - Sunucu envanterinin yönetimi için web paneli.
 
@@ -115,8 +115,9 @@ Gateway, her sunucu için tanımlanan Cockpit hesabının yetkileriyle çalış�
 | `read_logs` | `journalctl` (birim, zaman, öncelik ve arama filtresi) |
 | `top_processes` | En çok kaynak tüketen süreçler |
 | `network_info` | IP adresleri, rotalar, dinlenen portlar |
-| `firewall_status` | firewalld durumu ve kuralları |
+| `firewall_status` | Güvenlik duvarı (`firewalld` veya `ufw`) durumu ve kuralları |
 | `selinux_status` | SELinux modu ve son engellemeler |
+| `apparmor_status` | AppArmor profil durumu ve son engellemeler |
 | `available_updates` | Bekleyen (güvenlik) güncellemeleri |
 | `package_info` | Paket kurulum durumu ve sürümü |
 
@@ -127,13 +128,13 @@ Gateway, her sunucu için tanımlanan Cockpit hesabının yetkileriyle çalış�
 | `service_action` | Servis başlatma, durdurma, yeniden başlatma, yeniden yükleme, etkinleştirme, devre dışı bırakma |
 | `install_updates` | Paket güncellemelerinin kurulumu (isteğe bağlı yalnızca güvenlik) |
 | `package_install` / `package_remove` | Paket kurulumu ve kaldırılması |
-| `firewall_rule` | Kalıcı port veya servis kuralı ekleme/kaldırma |
+| `firewall_rule` | Kalıcı port veya servis kuralı ekleme/kaldırma (`firewalld` veya `ufw`) |
 | `reboot_server` | Sunucunun yeniden başlatılması |
 | `run_remote_command` | Serbest komut (isteğe bağlı yönetici yetkisiyle) |
 
 Değişiklik araçları `confirm: true` parametresi olmadan çalıştırılmaz; bu durumda yalnızca yapılacak işlemin önizlemesi döner.
 
-> Paket araçları (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`), `/etc/os-release` üzerinden seçilerek hem `dnf` (RHEL ailesi) hem `apt` (Debian/Ubuntu) destekler. Güvenlik duvarı araçları RHEL ailesi (`firewalld`) için tasarlanmıştır; diğer dağıtımlarda bu işlemler `run_remote_command` ile yapılabilir.
+> Paket araçları (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`), hem `apt` (Debian/Ubuntu) hem `dnf` (Fedora/RHEL) destekler. Dağıtım her bağlantıda `/etc/os-release` üzerinden okunur ve sunucuyla birlikte saklanır. Güvenlik duvarı araçları `firewalld` ve `ufw` hangisi kuruluysa onu kullanır; bu bilgi de her bağlantıda kontrol edilir. `firewall_rule`, `ufw`'yi asla açmaz.
 
 ## 6. Güvenlik
 
@@ -173,8 +174,8 @@ Değişiklik araçları `confirm: true` parametresi olmadan çalıştırılmaz; 
 **Kurulum:**
 
 ```bash
-git clone https://github.com/bmericc/rhel-mcp-gateway
-cd rhel-mcp-gateway
+git clone https://github.com/bmericc/cockpit-mcp-gateway
+cd cockpit-mcp-gateway
 cp sample.env .env      # yapılandırma değerlerini düzenleyin
 docker compose up -d --build
 ```

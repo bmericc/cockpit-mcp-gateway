@@ -3,6 +3,7 @@ import asyncio
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 from mcp.shared.memory import create_connected_server_and_client_session
 
 import fleet_tools
@@ -46,10 +47,24 @@ RHSA-2026:1300 Moderate/Sec.  curl-7.76.1-29.el9.x86_64
 
 UBUNTU_OS_RELEASE = """\
 NAME="Ubuntu"
+VERSION_ID="24.04"
 ID=ubuntu
 ID_LIKE=debian
 PRETTY_NAME="Ubuntu 24.04.1 LTS"
 """
+
+RHEL_OS_RELEASE = """\
+NAME="Red Hat Enterprise Linux"
+VERSION="9.4 (Plow)"
+VERSION_ID="9.4"
+ID="rhel"
+ID_LIKE="fedora"
+PRETTY_NAME="Red Hat Enterprise Linux 9.4 (Plow)"
+"""
+
+DEBIAN_DISTRO = {"id": "debian", "name": "Debian", "version": "12", "package_manager": "apt",
+                 "firewall": "ufw", "selinux": False, "apparmor": True}
+RHEL_TOOLS = "/usr/bin/firewall-cmd\n/usr/sbin/getenforce\n"
 
 APT_UPGRADABLE = """\
 Listing...
@@ -120,6 +135,34 @@ def test_parse_os_release_and_loadavg():
     assert fleet_tools.parse_loadavg("0.50 0.40 0.30 1/200 999") == {"load_1m": 0.5, "load_5m": 0.4, "load_15m": 0.3}
 
 
+@pytest.mark.parametrize("text,distro_id,manager", [
+    ('ID=debian\nPRETTY_NAME="Debian GNU/Linux 12"\n', "debian", "apt"),
+    (UBUNTU_OS_RELEASE, "ubuntu", "apt"),
+    ('ID=linuxmint\nID_LIKE="ubuntu debian"\n', "linuxmint", "apt"),
+    (RHEL_OS_RELEASE, "rhel", "dnf"),
+    ('ID="rocky"\nID_LIKE="rhel centos fedora"\n', "rocky", "dnf"),
+    ('ID=fedora\n', "fedora", "dnf"),
+    ('ID="opensuse-leap"\nID_LIKE="suse opensuse"\n', "opensuse-leap", None),
+    ('ID=arch\n', "arch", None),
+])
+def test_parse_distro(text, distro_id, manager):
+    distro = fleet_tools.parse_distro(text)
+    assert (distro["id"], distro["package_manager"]) == (distro_id, manager)
+
+
+def test_parse_distro_name_and_version():
+    distro = fleet_tools.parse_distro(RHEL_OS_RELEASE)
+    assert (distro["name"], distro["version"]) == ("Red Hat Enterprise Linux", "9.4")
+    assert fleet_tools.parse_distro('ID=x\nVERSION="1 (y)"\n')["version"] == "1 (y)"
+    rolling = fleet_tools.parse_distro("ID=arch\n")
+    assert (rolling["name"], rolling["version"]) == ("arch", None)
+
+
+@pytest.mark.parametrize("text", ["", "NAME=NoId\n", "active (running)\n"])
+def test_parse_distro_without_id(text):
+    assert fleet_tools.parse_distro(text) is None
+
+
 def test_truncate():
     assert fleet_tools.truncate("abc", 5) == "abc"
     assert fleet_tools.truncate("a" * 10, 5).startswith("aaaaa\n... [output truncated")
@@ -172,18 +215,25 @@ class Result:
 class ScriptedConn:
     """Komut metnine göre yanıt veren sahte SSH bağlantısı."""
 
-    def __init__(self, script, commands, delay=0):
-        self.script = script
-        self.commands = commands
-        self.delay = delay
+    def __init__(self, state):
+        self.state = state
+        self.script = state["script"]
+        self.commands = state["commands"]
+        self.delay = state["delay"]
 
     async def run(self, command, check=False):
-        self.commands.append(command)
+        # Her bağlantıdaki dağıtım kontrolü ayrı tutulur; `commands` aracın kendi komutlarıdır
+        probe = "os-release" in command or "/usr/sbin/ufw" in command
+        (self.state["probes"] if probe else self.commands).append(command)
         if self.delay:
             await asyncio.sleep(self.delay)
         for needle, result in self.script:
             if needle in command:
                 return result
+        if "os-release" in command:
+            return Result(0, self.state["os_release"])
+        if "/usr/sbin/ufw" in command:
+            return Result(2, self.state["tools"], "ls: cannot access")
         return Result(0, "", "")
 
     async def __aenter__(self):
@@ -195,13 +245,14 @@ class ScriptedConn:
 
 @pytest.fixture
 def ssh(monkeypatch, servers_file):
-    state = {"script": [], "commands": [], "connects": [], "delay": 0, "unreachable": set()}
+    state = {"script": [], "commands": [], "probes": [], "connects": [], "delay": 0, "unreachable": set(),
+             "os_release": RHEL_OS_RELEASE, "tools": RHEL_TOOLS}
 
     def connect(host, **kwargs):
         state["connects"].append((host, kwargs["username"]))
         if host in state["unreachable"]:
             raise OSError("No route to host")
-        return ScriptedConn(state["script"], state["commands"], state["delay"])
+        return ScriptedConn(state)
 
     monkeypatch.setattr(main.asyncssh, "connect", connect)
     servers_file({
@@ -332,7 +383,7 @@ async def test_install_updates_apt(ssh):
     assert data["package_manager"] == "apt"
     assert ssh["commands"][-1] == (
         "env LC_ALL=C env DEBIAN_FRONTEND=noninteractive apt-get -y "
-        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade --with-new-pkgs"
+        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=120 upgrade --with-new-pkgs"
     )
 
 
@@ -390,7 +441,7 @@ async def test_package_install_apt(ssh):
     assert data["package_manager"] == "apt"
     assert ssh["commands"][-1] == (
         "sudo -n env LC_ALL=C env DEBIAN_FRONTEND=noninteractive apt-get -y "
-        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install htop"
+        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=120 install htop"
     )
 
 
@@ -400,7 +451,7 @@ async def test_package_remove_apt(ssh):
     data = payload(await call("package_remove", {"server_name": "root-box", "names": ["htop", "tmux"], "confirm": True}))
     assert data["package_manager"] == "apt"
     assert ssh["commands"][-1].endswith("apt-get -y -o Dpkg::Options::=--force-confdef "
-                                        "-o Dpkg::Options::=--force-confold remove htop tmux")
+                                        "-o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=120 remove htop tmux")
     assert not any("dnf" in c for c in ssh["commands"])
 
 
@@ -437,6 +488,311 @@ async def test_package_install_dnf_keeps_suffix(ssh):
 async def test_package_remove_dnf(ssh):
     await call("package_remove", {"server_name": "root-box", "names": ["htop"], "confirm": True})
     assert ssh["commands"][-1] == "env LC_ALL=C dnf -y remove htop"
+
+
+# --- Kayıtlı dağıtım bilgisi ---
+
+def reads_os_release(ssh):
+    return sum("os-release" in c for c in ssh["probes"])
+
+
+@pytestmark_anyio
+async def test_distro_is_checked_on_every_connection(ssh):
+    ssh["script"] = [("os-release", Result(0, UBUNTU_OS_RELEASE))]
+    await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
+    await call("package_remove", {"server_name": "root-box", "names": ["htop"], "confirm": True})
+    assert reads_os_release(ssh) == 2
+    distro = main.load_servers()["root-box"]["distro"]
+    assert (distro["name"], distro["version"], distro["package_manager"]) == ("Ubuntu", "24.04", "apt")
+    assert not any("dnf" in c for c in ssh["commands"])
+
+
+@pytestmark_anyio
+async def test_stored_distro_is_used_when_check_fails(ssh, servers_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
+                          "distro": DEBIAN_DISTRO}})
+    ssh["script"] = [("os-release", Result(1, "", "No such file"))]
+    await call("package_install", {"server_name": "deb", "names": ["htop"], "confirm": True})
+    assert "apt-get" in ssh["commands"][-1]
+    assert main.load_servers()["deb"]["distro"] == DEBIAN_DISTRO
+
+
+@pytestmark_anyio
+async def test_timed_out_tool_listing_keeps_stored_distro(ssh, servers_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
+                          "distro": DEBIAN_DISTRO}})
+    ssh["os_release"] = 'ID=debian\nNAME="Debian"\nVERSION_ID="12"\n'
+    ssh["script"] = [("/usr/sbin/ufw", Result(None, "", ""))]
+    await call("failed_services", {"server_name": "deb"})
+    assert main.load_servers()["deb"]["distro"] == DEBIAN_DISTRO
+
+
+@pytestmark_anyio
+async def test_all_tools_check_distro(ssh):
+    await call("failed_services", {"server_name": "root-box"})
+    await call("run_remote_command", {"server_name": "root-box", "command": "uptime", "confirm": True})
+    await call("fleet_health", {})
+    assert reads_os_release(ssh) == 4
+    assert main.load_servers()["user-box"]["distro"]["id"] == "rhel"
+
+
+@pytestmark_anyio
+async def test_preview_does_not_connect(ssh):
+    await call("package_install", {"server_name": "root-box", "names": ["htop"]})
+    assert ssh["connects"] == []
+
+
+@pytestmark_anyio
+async def test_changed_server_updates_the_record_and_is_used_at_once(ssh, servers_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
+                          "distro": {**DEBIAN_DISTRO, "firewall": None}}})
+    ssh["os_release"] = 'ID=debian\nNAME="Debian"\nVERSION_ID="12"\n'
+    ssh["tools"] = "/usr/sbin/ufw\n/usr/sbin/aa-status\n"
+    ssh["script"] = [("ufw status", Result(0, "Status: active\n"))]
+    data = payload(await call("firewall_status", {"server_name": "deb"}))
+    assert data["firewall"] == "ufw"
+    assert main.load_servers()["deb"]["distro"]["firewall"] == "ufw"
+
+
+@pytestmark_anyio
+async def test_unchanged_distro_is_not_rewritten(ssh, servers_file, monkeypatch):
+    await call("failed_services", {"server_name": "root-box"})
+    writes = []
+    monkeypatch.setattr(main, "save_servers", lambda servers: writes.append(servers))
+    await call("failed_services", {"server_name": "root-box"})
+    assert writes == []
+
+
+@pytestmark_anyio
+async def test_unsupported_distro_runs_no_package_command(ssh):
+    ssh["script"] = [("os-release", Result(0, 'ID=arch\nPRETTY_NAME="Arch Linux"\n'))]
+    result = await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
+    assert result.isError
+    assert "Arch Linux" in result.content[0].text
+    assert not any("install" in c for c in ssh["commands"])
+    # Bilinen dağıtım kaydedilir; sonraki çağrılar yeniden sormaz
+    assert main.load_servers()["root-box"]["distro"]["id"] == "arch"
+    await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
+    assert not any("install" in c for c in ssh["commands"])
+
+
+@pytestmark_anyio
+async def test_undetectable_distro_is_error_and_not_stored(ssh):
+    ssh["script"] = [("os-release", Result(1, "", "No such file"))]
+    result = await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
+    assert result.isError
+    assert ssh["commands"] == []
+    assert "distro" not in main.load_servers()["root-box"]
+
+
+@pytestmark_anyio
+async def test_preview_shows_only_the_stored_package_manager(ssh, servers_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
+                          "distro": DEBIAN_DISTRO}})
+    text = (await call("package_install", {"server_name": "deb", "names": ["htop"]})).content[0].text
+    assert "apt-get -y install htop" in text
+    assert "dnf" not in text
+    assert ssh["connects"] == []
+
+
+@pytestmark_anyio
+async def test_preview_shows_both_until_distro_is_known(ssh):
+    text = (await call("package_remove", {"server_name": "root-box", "names": ["htop"]})).content[0].text
+    assert "apt-get -y remove htop" in text
+    assert "dnf -y remove htop" in text
+    assert ssh["connects"] == []
+
+
+# --- Debian: ufw, AppArmor, SELinux'suz sunucular ---
+
+@pytest.fixture
+def debian(ssh, servers_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k", "distro": DEBIAN_DISTRO}})
+    ssh["os_release"] = 'ID=debian\nNAME="Debian"\nVERSION_ID="12"\n'
+    ssh["tools"] = "/usr/sbin/ufw\n/usr/sbin/aa-status\n"
+    return ssh
+
+
+@pytestmark_anyio
+@pytest.mark.parametrize("listing,active,firewall,selinux,apparmor", [
+    ("/usr/sbin/ufw\n/usr/sbin/aa-status\n", "", "ufw", False, True),
+    (RHEL_TOOLS, "", "firewalld", True, False),
+    ("", "", None, False, False),
+    ("/usr/bin/firewall-cmd\n/usr/sbin/ufw\n", "active\n", "firewalld", False, False),
+    ("/usr/bin/firewall-cmd\n/usr/sbin/ufw\n", "inactive\n", "ufw", False, False),
+])
+async def test_detection_records_security_tools(ssh, listing, active, firewall, selinux, apparmor):
+    ssh["script"] = [("/usr/sbin/ufw", Result(2, listing)), ("is-active firewalld", Result(0, active))]
+    await call("package_info", {"server_name": "root-box", "name": "htop"})
+    distro = main.load_servers()["root-box"]["distro"]
+    assert (distro["firewall"], distro["selinux"], distro["apparmor"]) == (firewall, selinux, apparmor)
+
+
+@pytestmark_anyio
+async def test_firewall_status_ufw(debian):
+    debian["script"] = [("ufw status", Result(0, "Status: active\nLogging: on (low)\n\n22/tcp ALLOW IN Anywhere\n"))]
+    data = payload(await call("firewall_status", {"server_name": "deb"}))
+    assert (data["firewall"], data["state"]) == ("ufw", "active")
+    assert "22/tcp" in data["rules"]
+    assert debian["commands"] == ["env LC_ALL=C ufw status verbose"]
+
+
+@pytestmark_anyio
+async def test_firewall_status_without_firewall_runs_nothing(debian):
+    debian["tools"] = "/usr/sbin/aa-status\n"
+    data = payload(await call("firewall_status", {"server_name": "deb"}))
+    assert data["firewall"] is None
+    assert "ufw" in data["note"]
+    assert debian["commands"] == []
+
+
+@pytestmark_anyio
+@pytest.mark.parametrize("args,expected", [
+    ({"action": "add", "port": "8080/tcp"}, "ufw allow 8080/tcp"),
+    ({"action": "add", "port": "3000-3010/udp"}, "ufw allow 3000:3010/udp"),
+    ({"action": "add", "service": "http"}, "ufw allow http"),
+    ({"action": "remove", "port": "8080/tcp"}, "ufw delete allow 8080/tcp"),
+])
+async def test_firewall_rule_ufw(debian, args, expected):
+    debian["script"] = [("ufw status", Result(0, "Status: active\n"))]
+    data = payload(await call("firewall_rule", {"server_name": "deb", "confirm": True, **args}))
+    assert debian["commands"] == [f"env LC_ALL=C {expected}", "env LC_ALL=C ufw status"]
+    assert (data["firewall"], data["state"]) == ("ufw", "active")
+    assert "note" not in data
+
+
+@pytestmark_anyio
+async def test_firewall_rule_ufw_inactive_warns_and_never_enables(debian):
+    debian["script"] = [("ufw status", Result(0, "Status: inactive\n"))]
+    data = payload(await call("firewall_rule", {"server_name": "deb", "action": "add", "port": "80/tcp", "confirm": True}))
+    assert "does not enable" in data["note"]
+    assert not any("enable" in c for c in debian["commands"])
+
+
+@pytestmark_anyio
+async def test_firewall_rule_ufw_failure_skips_status(debian):
+    debian["script"] = [("ufw allow", Result(1, "", "ERROR: Bad port"))]
+    data = payload(await call("firewall_rule", {"server_name": "deb", "action": "add", "port": "80/tcp", "confirm": True}))
+    assert data["exit_status"] == 1
+    assert len(debian["commands"]) == 1
+
+
+@pytestmark_anyio
+async def test_firewall_rule_without_firewall_is_error(debian):
+    debian["tools"] = ""
+    result = await call("firewall_rule", {"server_name": "deb", "action": "add", "port": "80/tcp", "confirm": True})
+    assert result.isError
+    assert debian["commands"] == []
+
+
+@pytestmark_anyio
+async def test_firewall_preview_uses_stored_firewall(debian):
+    text = (await call("firewall_rule", {"server_name": "deb", "action": "add", "port": "80/tcp"})).content[0].text
+    assert "ufw allow 80/tcp" in text
+    assert "firewall-cmd" not in text
+    assert debian["connects"] == []
+
+
+@pytestmark_anyio
+async def test_firewall_preview_shows_both_until_known(ssh):
+    text = (await call("firewall_rule", {"server_name": "root-box", "action": "add", "port": "80/tcp"})).content[0].text
+    assert "ufw allow 80/tcp" in text
+    assert "firewall-cmd --permanent --add-port=80/tcp" in text
+
+
+@pytestmark_anyio
+async def test_selinux_status_without_selinux_runs_nothing(debian):
+    data = payload(await call("selinux_status", {"server_name": "deb"}))
+    assert data["selinux"] is False
+    assert debian["commands"] == []
+
+
+@pytestmark_anyio
+async def test_selinux_status_with_selinux(ssh):
+    ssh["script"] = [("C getenforce", Result(0, "Enforcing\n"))]
+    data = payload(await call("selinux_status", {"server_name": "root-box"}))
+    assert data["mode"] == "Enforcing"
+
+
+@pytestmark_anyio
+async def test_apparmor_status(debian):
+    debian["script"] = [
+        ("C aa-status", Result(0, "apparmor module is loaded.\n12 profiles are loaded.\n")),
+        ("journalctl", Result(0, 'kernel: audit: apparmor="DENIED" operation="open"\n')),
+    ]
+    data = payload(await call("apparmor_status", {"server_name": "deb"}))
+    assert "12 profiles" in data["status"]
+    assert "DENIED" in data["recent_denials"]
+
+
+@pytestmark_anyio
+@pytest.mark.parametrize("journal", [Result(1, ""), Result(0, "-- No entries --\n")])
+async def test_apparmor_status_without_denials(debian, journal):
+    debian["script"] = [("journalctl", journal)]
+    data = payload(await call("apparmor_status", {"server_name": "deb"}))
+    assert data["recent_denials"] == "No AppArmor denials in the last 10 minutes."
+
+
+@pytestmark_anyio
+async def test_apparmor_status_not_installed_runs_nothing(ssh):
+    data = payload(await call("apparmor_status", {"server_name": "root-box"}))
+    assert data["apparmor"] is False
+    assert ssh["commands"] == []
+
+
+# --- Eski kayıtların tamamlanması ---
+
+@pytestmark_anyio
+async def test_migration_fills_old_records(ssh, audit_file):
+    await main.migrate_servers()
+    servers = main.load_servers()
+    assert servers["root-box"]["distro"]["version"] == "9.4"
+    assert servers["user-box"]["distro"]["package_manager"] == "dnf"
+    entry = audit_file(source="system")[0]
+    assert (entry["action"], entry["status"]) == ("distro_migration", "ok")
+    assert sorted(entry["args"]["servers"]) == ["root-box", "user-box"]
+
+
+@pytestmark_anyio
+async def test_migration_runs_nothing_when_up_to_date(ssh, servers_file, audit_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
+                          "distro": {"id": "arch", "name": "Arch", "version": None, "package_manager": None,
+                                     "firewall": None, "selinux": False, "apparmor": False}}})
+    await main.migrate_servers()
+    assert ssh["connects"] == []
+    assert audit_file(source="system") == []
+
+
+@pytestmark_anyio
+async def test_migration_upgrades_distro_without_version(ssh, servers_file):
+    servers_file({"deb": {"name": "deb", "host": "10.0.0.3", "user": "root", "ssh_key_path": "/k",
+                          "distro": {"id": "debian", "name": "Debian", "package_manager": "apt"}}})
+    ssh["script"] = [("os-release", Result(0, 'ID=debian\nNAME="Debian"\nVERSION_ID="12"\n'))]
+    await main.migrate_servers()
+    assert main.load_servers()["deb"]["distro"]["version"] == "12"
+
+
+@pytestmark_anyio
+async def test_migration_skips_unreachable_and_keeps_going(ssh, audit_file):
+    ssh["unreachable"].add("10.0.0.2")
+    await main.migrate_servers()
+    servers = main.load_servers()
+    assert "distro" in servers["root-box"]
+    assert "distro" not in servers["user-box"]
+    entry = audit_file(source="system")[0]
+    assert (entry["status"], entry["args"]["failed"]) == ("error", ["user-box"])
+
+
+def test_migration_starts_with_the_app(monkeypatch):
+    calls = []
+
+    async def fake():
+        calls.append(True)
+
+    monkeypatch.setattr(main, "migrate_servers", fake)
+    with TestClient(main.app):
+        pass
+    assert calls == [True]
 
 
 @pytestmark_anyio
@@ -490,7 +846,7 @@ async def test_package_info_apt_unknown_package(ssh):
 @pytestmark_anyio
 async def test_firewall_rule_reloads_after_change(ssh):
     await call("firewall_rule", {"server_name": "root-box", "action": "add", "port": "8080/tcp", "confirm": True})
-    assert ssh["commands"] == [
+    assert ssh["commands"][-2:] == [
         "env LC_ALL=C firewall-cmd --permanent --add-port=8080/tcp",
         "env LC_ALL=C firewall-cmd --reload",
     ]
@@ -500,7 +856,7 @@ async def test_firewall_rule_reloads_after_change(ssh):
 async def test_firewall_rule_skips_reload_on_failure(ssh):
     ssh["script"] = [("--permanent", Result(1, "", "Error: INVALID_PORT"))]
     await call("firewall_rule", {"server_name": "root-box", "action": "add", "service": "http", "confirm": True})
-    assert len(ssh["commands"]) == 1
+    assert not any("--reload" in c for c in ssh["commands"])
 
 
 @pytestmark_anyio

@@ -1,12 +1,12 @@
-# RHEL MCP Gateway
+# Cockpit MCP Gateway
 
-[![tests](https://github.com/bmericc/rhel-mcp-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/bmericc/rhel-mcp-gateway/actions/workflows/tests.yml)
+[![tests](https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml)
 
 **English** · [Türkçe](README.tr.md)
 
-A gateway that exposes RHEL servers to [Model Context Protocol (MCP)](https://modelcontextprotocol.io) clients (Claude etc.) through the [Cockpit](https://cockpit-project.org) running on them. An AI assistant can read the state of the servers, manage services/packages/firewall and run commands.
+A gateway that exposes Linux servers to [Model Context Protocol (MCP)](https://modelcontextprotocol.io) clients (Claude etc.) through the [Cockpit](https://cockpit-project.org) running on them. It works with any distribution that runs Cockpit, such as Debian, Ubuntu, Fedora and RHEL. An AI assistant can read the state of the servers, manage services/packages/firewall and run commands.
 
-![How RHEL MCP Gateway works](docs/images/how-it-works.png)
+![How Cockpit MCP Gateway works](docs/images/how-it-works.png)
 
 For a detailed description of the architecture and security: [Technical Overview](docs/overview.md)
 
@@ -26,15 +26,17 @@ The gateway listens on port `7435`. Put a reverse proxy that terminates HTTPS (n
 Cockpit must be installed and running on the target servers:
 
 ```bash
-sudo dnf install -y cockpit            # Debian/Ubuntu: sudo apt install -y cockpit
+sudo apt install -y cockpit            # Fedora/RHEL: sudo dnf install -y cockpit
 sudo systemctl enable --now cockpit.socket
 ```
+
+Administrative operations need `sudo`, which a minimal Debian installation does not have. Install it and give the Cockpit user the right to use it: `apt install sudo && usermod -aG sudo USER`.
 
 If the gateway can reach the server over SSH, the Cockpit port (9090) does not need to be opened to the outside; Cockpit is reached through an SSH tunnel (see *Connection order*). If direct access is wanted, the port should only be opened to the gateway's IP address:
 
 ```bash
-sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="GATEWAY_IP" port port="9090" protocol="tcp" accept' && sudo firewall-cmd --reload
-# ufw: sudo ufw allow from GATEWAY_IP to any port 9090 proto tcp
+sudo ufw allow from GATEWAY_IP to any port 9090 proto tcp
+# firewalld: sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="GATEWAY_IP" port port="9090" protocol="tcp" accept' && sudo firewall-cmd --reload
 ```
 
 ### Environment variables (`.env`)
@@ -72,7 +74,7 @@ If the gateway password is added to the MCP address (`https://<PUBLIC_URL>/sse?t
 **Claude Code:**
 
 ```bash
-claude mcp add --transport sse rhel-gateway "https://<PUBLIC_URL>/sse?token=<token>"
+claude mcp add --transport sse cockpit-gateway "https://<PUBLIC_URL>/sse?token=<token>"
 ```
 
 OAuth flow endpoints:
@@ -145,8 +147,9 @@ Every tool output says which route was used: `"connection": {"via": "cockpit" | 
 | `read_logs` | `journalctl` (unit, time, priority, search filter) |
 | `top_processes` | Processes using the most CPU/memory |
 | `network_info` | IPs, routes, listening ports |
-| `firewall_status` | firewalld state and rules |
+| `firewall_status` | Firewall (`firewalld` or `ufw`) state and rules |
 | `selinux_status` | SELinux mode and recent denials |
+| `apparmor_status` | AppArmor profile status and recent denials (Debian/Ubuntu) |
 | `available_updates` | Pending (security) updates |
 | `package_info` | Whether a package is installed, and its version |
 
@@ -157,11 +160,11 @@ Every tool output says which route was used: `"connection": {"via": "cockpit" | 
 | `service_action` | start / stop / restart / reload / enable / disable |
 | `install_updates` | `dnf upgrade` / `apt-get upgrade` (optionally security only) |
 | `package_install` / `package_remove` | Install / remove packages (`dnf` / `apt-get`) |
-| `firewall_rule` | Add/remove a permanent port/service rule |
+| `firewall_rule` | Add/remove a permanent port/service rule (`firewalld` or `ufw`) |
 | `reboot_server` | Reboot |
 | `run_remote_command` | Arbitrary command (administrator privileges with `as_root`) |
 
-The package tools (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`) detect the distribution from `/etc/os-release` and use `dnf` on the RHEL family and `apt` on Debian/Ubuntu. The firewall tools are for the RHEL family (`firewalld`); on Debian/Ubuntu servers `run_remote_command` can be used instead.
+The package tools (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`) use `apt` on Debian/Ubuntu and `dnf` on Fedora/RHEL; on other distributions they return an error without running anything. The distribution is read from `/etc/os-release` when a server is added and on every connection to it, and `data/servers.json` is updated when it changes. The distribution and its version are shown in the panel and in `list_servers`. These read commands appear in the audit log of each call. When upgrading from an older version nothing needs to be done: at startup the gateway fills in this information for existing servers in the background, and any server it cannot reach is completed later. The firewall tools use whichever of `firewalld` and `ufw` is installed; if both are, `firewalld` is used when it is active. `firewall_rule` never enables `ufw`, because that could cut off access to the server; if it is inactive the tool says so. `selinux_status` and `apparmor_status` answer without running anything on servers that do not have that module. The installed tools are checked together with the distribution, so a newly installed one is picked up on the next connection.
 
 Inputs (service, package, port etc.) are validated. Commands are passed as argv, so they are not open to command injection. Outputs are returned as JSON, long outputs are truncated, and commands time out.
 

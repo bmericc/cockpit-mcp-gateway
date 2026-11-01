@@ -28,6 +28,37 @@ def client(monkeypatch, servers_file):
     return c
 
 
+DEBIAN = {"id": "debian", "name": "Debian GNU/Linux", "version": "12", "package_manager": "apt",
+          "firewall": "ufw", "selinux": False, "apparmor": True}
+
+
+def spawned(cockpit):
+    return [m["spawn"] for m in cockpit.fake.opened]
+
+
+def test_save_stores_detected_distro_and_panel_shows_it(client, cockpit):
+    assert client.post("/servers", data=form(cockpit.url), follow_redirects=False).status_code == 303
+    assert main.load_servers()["srv"]["distro"] == DEBIAN
+    page = client.get("/").text
+    assert "<td>Debian GNU/Linux</td><td>12</td>" in page
+
+
+def test_skip_check_leaves_distro_unknown(client, cockpit):
+    client.post("/servers", data=form(cockpit.url, skip_check="on"), follow_redirects=False)
+    assert "distro" not in main.load_servers()["srv"]
+    assert "distribution not detected yet" in client.get("/").text
+    assert spawned(cockpit) == []
+
+
+def test_test_button_refreshes_distro(client, cockpit):
+    client.post("/servers", data=form(cockpit.url), follow_redirects=False)
+    servers = main.load_servers()
+    servers["srv"]["distro"] = {"id": "old", "name": "Old", "package_manager": None}
+    main.save_servers(servers)
+    client.post("/servers/srv/test", follow_redirects=False)
+    assert main.load_servers()["srv"]["distro"] == DEBIAN
+
+
 def form(cockpit_url, password=PASSWORD, **extra):
     data = {"name": "srv", "host": "127.0.0.1", "port": "22", "cockpit_url": cockpit_url,
             "cockpit_user": "admin", "cockpit_password": password}
@@ -55,7 +86,7 @@ def test_save_with_correct_cockpit_credentials(cockpit, client):
     assert cfg["last_check"]["ok"] is True
     assert cfg["last_check"]["via"] == "cockpit"
     # Gerçekten komut çalıştırıldı
-    assert cockpit.fake.opened[-1]["spawn"] == ["true"]
+    assert ["true"] in spawned(cockpit)
     assert "✓" in client.get("/").text
 
 

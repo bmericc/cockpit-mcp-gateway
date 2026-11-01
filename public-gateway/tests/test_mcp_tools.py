@@ -110,7 +110,7 @@ async def test_run_remote_command_success(servers_file, sample_server, fake_ssh)
     assert kwargs["port"] == 2222
     assert kwargs["username"] == "admin"
     assert kwargs["client_keys"] == ["/root/.ssh/id_rsa"]
-    assert calls[1] == ("run", "systemctl status nginx", False)
+    assert calls[-1] == ("run", "systemctl status nginx", False)
 
 
 async def test_run_remote_command_default_port(servers_file, sample_server, fake_ssh):

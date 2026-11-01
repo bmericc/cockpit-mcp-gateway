@@ -1,12 +1,12 @@
-# RHEL MCP Gateway
+# Cockpit MCP Gateway
 
-[![tests](https://github.com/bmericc/rhel-mcp-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/bmericc/rhel-mcp-gateway/actions/workflows/tests.yml)
+[![tests](https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml)
 
 [English](README.md) · **Türkçe**
 
-RHEL sunucularını, üzerlerindeki [Cockpit](https://cockpit-project.org) aracılığıyla [Model Context Protocol (MCP)](https://modelcontextprotocol.io) istemcilerine (Claude vb.) açan bir gateway. Yapay zekâ asistanı sunucuların durumunu okuyabilir, servis/paket/firewall yönetebilir ve komut çalıştırabilir.
+Linux sunucularını, üzerlerindeki [Cockpit](https://cockpit-project.org) aracılığıyla [Model Context Protocol (MCP)](https://modelcontextprotocol.io) istemcilerine (Claude vb.) açan bir gateway. Debian, Ubuntu, Fedora ve RHEL gibi Cockpit çalıştıran her dağıtımla kullanılabilir. Yapay zekâ asistanı sunucuların durumunu okuyabilir, servis/paket/firewall yönetebilir ve komut çalıştırabilir.
 
-![RHEL MCP Gateway nasıl çalışıyor](docs/images/nasil-calisiyor.png)
+![Cockpit MCP Gateway nasıl çalışıyor](docs/images/nasil-calisiyor.png)
 
 Ayrıntılı mimari ve güvenlik açıklaması için: [Teknik Genel Bakış](docs/genel-bakis.md)
 
@@ -26,15 +26,17 @@ Gateway `7435` portunda çalışır. Önüne HTTPS sonlandıran bir reverse prox
 Hedef sunucularda Cockpit kurulu ve çalışır olmalı:
 
 ```bash
-sudo dnf install -y cockpit            # Debian/Ubuntu: sudo apt install -y cockpit
+sudo apt install -y cockpit            # Fedora/RHEL: sudo dnf install -y cockpit
 sudo systemctl enable --now cockpit.socket
 ```
+
+Yönetici işlemleri `sudo` gerektirir; minimal Debian kurulumunda `sudo` yoktur. Kurup Cockpit kullanıcısına yetki verin: `apt install sudo && usermod -aG sudo KULLANICI`.
 
 Gateway sunucuya SSH ile bağlanabiliyorsa Cockpit portunu (9090) dışarıya açmak gerekmez; Cockpit'e SSH tüneli içinden ulaşılır (bkz. *Bağlantı sırası*). Doğrudan erişim istenirse port yalnızca gateway'in IP adresine açılmalı:
 
 ```bash
-sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="GATEWAY_IP" port port="9090" protocol="tcp" accept' && sudo firewall-cmd --reload
-# ufw: sudo ufw allow from GATEWAY_IP to any port 9090 proto tcp
+sudo ufw allow from GATEWAY_IP to any port 9090 proto tcp
+# firewalld: sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="GATEWAY_IP" port port="9090" protocol="tcp" accept' && sudo firewall-cmd --reload
 ```
 
 ### Ortam değişkenleri (`.env`)
@@ -72,7 +74,7 @@ Gateway parolası MCP adresine eklenirse (`https://<PUBLIC_URL>/sse?token=<MCP_A
 **Claude Code:**
 
 ```bash
-claude mcp add --transport sse rhel-gateway "https://<PUBLIC_URL>/sse?token=<token>"
+claude mcp add --transport sse cockpit-gateway "https://<PUBLIC_URL>/sse?token=<token>"
 ```
 
 OAuth akışı uç noktaları:
@@ -145,8 +147,9 @@ Her araç çıktısında hangi yolla bağlanıldığı yazar: `"connection": {"v
 | `read_logs` | `journalctl` (unit, zaman, öncelik, arama filtresi) |
 | `top_processes` | En çok CPU/bellek kullanan süreçler |
 | `network_info` | IP'ler, rotalar, dinlenen portlar |
-| `firewall_status` | firewalld durumu ve kurallar |
+| `firewall_status` | Güvenlik duvarı (`firewalld` veya `ufw`) durumu ve kurallar |
 | `selinux_status` | SELinux modu ve son engellemeler |
+| `apparmor_status` | AppArmor profil durumu ve son engellemeler (Debian/Ubuntu) |
 | `available_updates` | Bekleyen (güvenlik) güncellemeleri |
 | `package_info` | Paket kurulu mu, sürümü |
 
@@ -157,11 +160,11 @@ Her araç çıktısında hangi yolla bağlanıldığı yazar: `"connection": {"v
 | `service_action` | start / stop / restart / reload / enable / disable |
 | `install_updates` | `dnf upgrade` / `apt-get upgrade` (opsiyonel yalnızca güvenlik) |
 | `package_install` / `package_remove` | Paket kur / kaldır (`dnf` / `apt-get`) |
-| `firewall_rule` | Kalıcı port/servis kuralı ekle/kaldır |
+| `firewall_rule` | Kalıcı port/servis kuralı ekle/kaldır (`firewalld` veya `ufw`) |
 | `reboot_server` | Yeniden başlat |
 | `run_remote_command` | Serbest komut (`as_root` ile yönetici yetkisi) |
 
-Paket araçları (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`) dağıtımı `/etc/os-release` üzerinden tespit eder; RHEL ailesinde `dnf`, Debian/Ubuntu'da `apt` kullanır. Güvenlik duvarı araçları RHEL ailesi içindir (`firewalld`); Debian/Ubuntu sunucularda bunlar yerine `run_remote_command` kullanılabilir.
+Paket araçları (`available_updates`, `install_updates`, `package_info`, `package_install`, `package_remove`) Debian/Ubuntu'da `apt`, Fedora/RHEL'de `dnf` kullanır; diğer dağıtımlarda hiçbir şey çalıştırmadan hata döner. Dağıtım, sunucu eklenirken ve her bağlantıda `/etc/os-release` üzerinden okunur; değiştiyse `data/servers.json` güncellenir. Dağıtım ve sürümü panelde ve `list_servers` çıktısında görünür. Bu okuma komutları her çağrının işlem kaydında yer alır. Eski sürümden geçerken bir şey yapmak gerekmez: gateway açılışta mevcut sunucular için bu bilgileri arka planda tamamlar, ulaşamadığı sunucular sonradan tamamlanır. Güvenlik duvarı araçları `firewalld` ve `ufw` hangisi kuruluysa onu kullanır; ikisi de kuruluysa `firewalld` aktifken o seçilir. `firewall_rule`, sunucuya erişimi kesebileceği için `ufw`'yi asla açmaz; kapalıysa bunu söyler. `selinux_status` ve `apparmor_status`, ilgili modül olmayan sunucularda hiçbir şey çalıştırmadan yanıt verir. Kurulu araçlar dağıtımla birlikte kontrol edilir; yeni kurulan araç bir sonraki bağlantıda görülür.
 
 Girdiler (servis, paket, port vb.) doğrulanır. Komutlar argv olarak verildiği için komut enjeksiyonuna kapalıdır. Çıktılar JSON döner, uzun çıktılar kırpılır, komutlar zaman aşımına uğrar.
 
