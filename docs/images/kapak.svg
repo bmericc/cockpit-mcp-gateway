@@ -13,7 +13,7 @@
   <rect x="70" y="80" width="8" height="200" rx="4" fill="url(#glow)"/>
 
   <text x="100" y="118" font-size="22" font-weight="600" fill="#5eead4" letter-spacing="2">COCKPIT MCP GATEWAY</text>
-  <text x="100" y="185" font-size="52" font-weight="800" fill="#f8fafc">Sunucularımı Claude ile</text>
+  <text x="100" y="185" font-size="52" font-weight="800" fill="#f8fafc">Sunucularımı yapay zekâ ile</text>
   <text x="100" y="250" font-size="52" font-weight="800" fill="#f8fafc">konuşarak yönetiyorum</text>
   <text x="100" y="300" font-size="22" fill="#94a3b8">Cockpit + Model Context Protocol · açık kaynak</text>
 
