@@ -10,6 +10,10 @@ Linux sunucularını, üzerlerindeki [Cockpit](https://cockpit-project.org) arac
 
 Ayrıntılı mimari ve güvenlik açıklaması için: [Teknik Genel Bakış](docs/genel-bakis.md)
 
+![Web paneli: kayıtlı sunucular](docs/images/screenshots/tr-servers.png)
+
+Daha fazla: [Özellik rehberi](docs/features.tr.md) · Docker ile kurulum: [Docker kurulumu](docs/docker-install.tr.md)
+
 - Komutlar sunucudaki **Cockpit** üzerinden çalışır. Cockpit portuna dışarıdan ulaşılamazsa Cockpit'e **SSH tüneli** içinden bağlanılır; o da olmazsa komutlar doğrudan **SSH** ile çalışır.
 - Gateway'e giriş (web paneli ve MCP istemcileri) **Cockpit hesabıyla** yapılır. Ayrı bir kullanıcı veritabanı yoktur.
 - Web paneli, hata mesajları ve MCP araç açıklamaları varsayılan olarak **İngilizce**dir; tarayıcı Türkçe istiyorsa (`Accept-Language`) **Türkçe** gösterilir.
@@ -22,7 +26,7 @@ docker compose pull
 docker compose up -d --no-build
 ```
 
-`linux/amd64`, `linux/arm64` ve `linux/arm/v7` imajları `ghcr.io/bmericc/cockpit-mcp-gateway` ve Docker Hub'da (`bmericc/cockpit-mcp-gateway`) yayınlanır. Sürümler etiketlenir (`1.0.0`, `1.0`); birine sabitlemek için `IMAGE_TAG` tanımlayın. Sürüm `public-gateway/VERSION` dosyasındadır, `v1.0.0` git etiketi bununla aynı olmalıdır.
+`linux/amd64`, `linux/arm64` ve `linux/arm/v7` imajları `ghcr.io/bmericc/cockpit-mcp-gateway` ve Docker Hub'da (`bmericc/cockpit-mcp-gateway`) yayınlanır. Sürümler etiketlenir (`1.0.0`, `1.0`, `1`), `latest` en yeni sürümü gösterir; birine sabitlemek için `IMAGE_TAG` tanımlayın. Adım adım: [Docker kurulumu](docs/docker-install.tr.md). Sürüm `public-gateway/VERSION` dosyasındadır, `v1.0.0` git etiketi bununla aynı olmalıdır.
 
 Gateway `7435` portunda çalışır. Önüne HTTPS sonlandıran bir reverse proxy (nginx, Caddy vb.) koyun; `X-Forwarded-*` başlıkları yalnızca `TRUSTED_PROXIES` adreslerinden kabul edilir. `docker-compose.yml` portu yalnızca `127.0.0.1` üzerinde açar; değiştirmek için `BIND_ADDRESS` tanımlayın.
 
@@ -224,6 +228,17 @@ python -m pytest
 | Klasör | Açıklama |
 | --- | --- |
 | `public-gateway/` | MCP sunucusu, OAuth yetkilendirme, web paneli, Cockpit ve SSH istemcileri |
+
+## Dokümantasyon
+
+| Belge | İçerik |
+| --- | --- |
+| [Docker kurulumu](docs/docker-install.tr.md) | Hazır imaj ya da kaynak koddan kurulum, tüm ayarlar, reverse proxy, güncelleme, yedekleme, sık sorunlar |
+| [Özellik rehberi](docs/features.tr.md) | Web paneli ekran ekran, ekran görüntüleriyle |
+| [Teknik Genel Bakış](docs/genel-bakis.md) | Mimari ve güvenlik |
+| [Değişiklik günlüğü](CHANGELOG.md) | Sürüm sürüm değişiklikler (İngilizce) |
+| [Katkıda bulunma](CONTRIBUTING.tr.md) | Hata bildirme, geliştirme ortamı, kontroller, kurallar |
+| [Güvenlik politikası](SECURITY.tr.md) | Desteklenen sürümler, açıkları gizli bildirme |
 
 ## Lisans
 
