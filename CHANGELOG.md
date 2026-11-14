@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Docker installation guide and panel feature guide with screenshots, in English and Turkish (`docs/docker-install.md`, `docs/features.md`).
 - `SECURITY.md`, `CONTRIBUTING.md` and this changelog.
 - Docker images get a `{{major}}` tag (`1`) next to `1.0.0` and `1.0`.
+- A GitHub release page is created for every version tag, with the notes taken from this changelog (`.github/workflows/release.yml`).
 
 ### Changed
 
