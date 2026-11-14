@@ -10,6 +10,10 @@ A gateway that exposes Linux servers to [Model Context Protocol (MCP)](https://m
 
 For a detailed description of the architecture and security: [Technical Overview](docs/overview.md)
 
+![Web panel: registered servers](docs/images/screenshots/en-servers.png)
+
+More: [Feature guide](docs/features.md) · Installing with Docker: [Docker installation](docs/docker-install.md)
+
 - Commands run through **Cockpit** on the server. If the Cockpit port is not reachable from outside, Cockpit is reached through an **SSH tunnel**; if that fails too, commands run directly over **SSH**.
 - Logging in to the gateway (web panel and MCP clients) is done with a **Cockpit account**. There is no separate user database.
 - The web panel, error messages and MCP tool descriptions are in **English** by default and in **Turkish** when the browser asks for it (`Accept-Language`).
@@ -22,7 +26,7 @@ docker compose pull
 docker compose up -d --no-build
 ```
 
-Images for `linux/amd64`, `linux/arm64` and `linux/arm/v7` are published to `ghcr.io/bmericc/cockpit-mcp-gateway` and Docker Hub (`bmericc/cockpit-mcp-gateway`). Releases are tagged by version (`1.0.0`, `1.0`); set `IMAGE_TAG` to pin one. The version lives in `public-gateway/VERSION`, and a `v1.0.0` git tag must match it.
+Images for `linux/amd64`, `linux/arm64` and `linux/arm/v7` are published to `ghcr.io/bmericc/cockpit-mcp-gateway` and Docker Hub (`bmericc/cockpit-mcp-gateway`). Releases are tagged by version (`1.0.0`, `1.0`, `1`) and `latest` points to the newest release; set `IMAGE_TAG` to pin one. Step by step: [Docker installation](docs/docker-install.md). The version lives in `public-gateway/VERSION`, and a `v1.0.0` git tag must match it.
 
 The gateway listens on port `7435`. Put a reverse proxy that terminates HTTPS (nginx, Caddy etc.) in front of it; `X-Forwarded-*` headers are honoured only from the addresses in `TRUSTED_PROXIES`. `docker-compose.yml` publishes the port on `127.0.0.1` only; set `BIND_ADDRESS` to change that.
 
@@ -224,6 +228,17 @@ python -m pytest
 | Folder | Description |
 | --- | --- |
 | `public-gateway/` | MCP server, OAuth authorization, web panel, Cockpit and SSH clients |
+
+## Documentation
+
+| Document | Content |
+| --- | --- |
+| [Docker installation](docs/docker-install.md) | Prebuilt image or from source, all settings, reverse proxy, updating, backup, troubleshooting |
+| [Feature guide](docs/features.md) | The web panel screen by screen, with screenshots |
+| [Technical Overview](docs/overview.md) | Architecture and security |
+| [Changelog](CHANGELOG.md) | Changes per release |
+| [Contributing](CONTRIBUTING.md) | Reporting bugs, development setup, checks, rules |
+| [Security policy](SECURITY.md) | Supported versions, reporting a vulnerability privately |
 
 ## License
 
