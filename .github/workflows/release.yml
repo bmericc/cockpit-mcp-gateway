@@ -48,7 +48,7 @@ jobs:
           docker pull ghcr.io/${owner}/cockpit-mcp-gateway:${version}
           \`\`\`
 
-          Also on Docker Hub as \`${DOCKERHUB_USER}/cockpit-mcp-gateway:${version}\`. See the [Docker installation guide](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/docker-install.md).
+          Also on Docker Hub as \`${DOCKERHUB_USER}/cockpit-mcp-gateway:${version}\`. See the [Docker installation guide](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/docker-install.md).
           EOF
       - name: Create or update the release
         run: |
