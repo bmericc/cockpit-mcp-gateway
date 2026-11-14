@@ -1,0 +1,59 @@
+name: release
+
+# Creates the GitHub release page for a version tag, with the notes taken
+# from that version's section in CHANGELOG.md.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to create or update the release for (e.g. v1.0.0)"
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DOCKERHUB_USER: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}
+    steps:
+      # A tag push checks out the tag; a manual run checks out the selected
+      # branch, so older tags can use notes added to CHANGELOG.md later
+      - uses: actions/checkout@v4
+      - name: Check that the tag matches VERSION
+        if: github.event_name == 'push'
+        run: test "${TAG#v}" = "$(cat public-gateway/VERSION)"
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          version="${TAG#v}"
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && (/^## \[/ || /^\[[^]]+\]: /) { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr "[:upper:]" "[:lower:]")
+          cat >> notes.md <<EOF
+
+          ### Docker images
+
+          \`\`\`bash
+          docker pull ghcr.io/${owner}/cockpit-mcp-gateway:${version}
+          \`\`\`
+
+          Also on Docker Hub as \`${DOCKERHUB_USER}/cockpit-mcp-gateway:${version}\`. See the [Docker installation guide](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/docker-install.md).
+          EOF
+      - name: Create or update the release
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
+          fi
