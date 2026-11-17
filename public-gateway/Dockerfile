@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
 WORKDIR /app
 COPY requirements.txt .
 # cffi has no armv7l wheel: it is compiled on arm/v7 and the toolchain is removed afterwards

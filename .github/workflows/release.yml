@@ -11,6 +11,9 @@ on:
         description: "Existing tag to create or update the release for (e.g. v1.0.0)"
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -23,7 +26,7 @@ jobs:
     steps:
       # A tag push checks out the tag; a manual run checks out the selected
       # branch, so older tags can use notes added to CHANGELOG.md later
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Check that the tag matches VERSION
         if: github.event_name == 'push'
         run: test "${TAG#v}" = "$(cat public-gateway/VERSION)"
