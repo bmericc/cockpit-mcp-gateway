@@ -1,6 +1,16 @@
 # Cockpit MCP Gateway
 
-[![tests](https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml)
+<p align="center">
+  <a href="https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml"><img src="https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/bmericc/cockpit-mcp-gateway"><img src="https://api.scorecard.dev/projects/github.com/bmericc/cockpit-mcp-gateway/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/docker.yml"><img src="https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/docker.yml/badge.svg" alt="Docker image"></a>
+  <a href="https://github.com/bmericc/cockpit-mcp-gateway/releases/latest"><img src="https://img.shields.io/github/v/release/bmericc/cockpit-mcp-gateway" alt="Latest release"></a>
+  <a href="https://github.com/bmericc/cockpit-mcp-gateway/actions/workflows/tests.yml"><img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11"></a>
+  <a href="https://cockpit-project.org"><img src="https://img.shields.io/badge/Cockpit-Debian%20%7C%20Ubuntu%20%7C%20Fedora%20%7C%20RHEL-0066CC" alt="Works with Cockpit on Debian, Ubuntu, Fedora and RHEL"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-server-6E56CF" alt="Model Context Protocol server"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
+  <a href="https://github.com/sponsors/bmericc"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors" alt="Sponsor"></a>
+</p>
 
 **English** · [Türkçe](README.tr.md)
 
