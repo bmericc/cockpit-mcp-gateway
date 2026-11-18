@@ -119,15 +119,15 @@ def test_login_error_follows_browser_language():
 def test_tool_descriptions_are_translated(turkish):
     tool = fleet_tools.TOOLS_BY_NAME["service_action"].to_tool()
     assert tool.description.startswith("Bir systemd servisini başlatır")
-    assert tool.inputSchema["properties"]["service"]["description"] == "Servis adı"
-    assert tool.inputSchema["properties"]["server_name"]["description"] == "Kayıtlı sunucu adı"
-    assert tool.inputSchema["properties"]["confirm"]["description"].startswith("İşlemi gerçekten uygulamak")
+    assert tool.input_schema["properties"]["service"]["description"] == "Servis adı"
+    assert tool.input_schema["properties"]["server_name"]["description"] == "Kayıtlı sunucu adı"
+    assert tool.input_schema["properties"]["confirm"]["description"].startswith("İşlemi gerçekten uygulamak")
 
 
 def test_tool_descriptions_default_to_english():
     tool = fleet_tools.TOOLS_BY_NAME["service_action"].to_tool()
     assert tool.description == "Starts, stops, restarts, reloads, enables or disables a systemd service."
-    assert tool.inputSchema["properties"]["service"]["description"] == "Service name"
+    assert tool.input_schema["properties"]["service"]["description"] == "Service name"
     # The spec itself is not mutated by translation
     assert fleet_tools.TOOLS_BY_NAME["service_action"].properties["service"]["description"] == "Service name"
 
