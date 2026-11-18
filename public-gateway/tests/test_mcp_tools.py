@@ -2,7 +2,7 @@ import json
 
 import asyncssh
 import pytest
-from mcp.shared.memory import create_connected_server_and_client_session
+from mcp import Client
 
 import connections
 import mcp_gateway
@@ -54,20 +54,20 @@ def fake_ssh(monkeypatch):
 
 
 async def call(name, arguments):
-    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
+    async with Client(mcp_gateway.mcp_server) as client:
         return await client.call_tool(name, arguments)
 
 
 async def test_list_tools():
-    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
+    async with Client(mcp_gateway.mcp_server) as client:
         result = await client.list_tools()
     tools = {t.name: t for t in result.tools}
     assert {"list_servers", "fleet_health", "run_remote_command", "service_status", "service_action"} <= set(tools)
-    assert tools["run_remote_command"].inputSchema["required"] == ["server_name", "command"]
-    assert tools["run_remote_command"].annotations.destructiveHint is True
-    assert tools["service_status"].annotations.readOnlyHint is True
-    assert "confirm" in tools["service_action"].inputSchema["properties"]
-    assert "confirm" not in tools["service_status"].inputSchema["properties"]
+    assert tools["run_remote_command"].input_schema["required"] == ["server_name", "command"]
+    assert tools["run_remote_command"].annotations.destructive_hint is True
+    assert tools["service_status"].annotations.read_only_hint is True
+    assert "confirm" in tools["service_action"].input_schema["properties"]
+    assert "confirm" not in tools["service_status"].input_schema["properties"]
 
 
 async def test_run_remote_command_requires_confirm(servers_file, sample_server, fake_ssh):
@@ -82,7 +82,7 @@ async def test_run_remote_command_requires_confirm(servers_file, sample_server, 
 
 async def test_list_servers_empty(servers_file):
     result = await call("list_servers", {})
-    assert not result.isError
+    assert not result.is_error
     assert json.loads(result.content[0].text) == {}
 
 
@@ -145,7 +145,7 @@ async def test_run_remote_command_ssh_error(servers_file, sample_server, fake_ss
 
 async def test_unknown_tool_returns_error():
     result = await call("olmayan_arac", {})
-    assert result.isError
+    assert result.is_error
     assert "Unknown tool: olmayan_arac" in result.content[0].text
 
 

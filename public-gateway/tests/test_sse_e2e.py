@@ -7,9 +7,10 @@ import time
 
 import pytest
 import uvicorn
+import httpx2
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 import mcp_gateway
 import access
@@ -179,7 +180,8 @@ async def test_open_stream_closes_when_token_expires(live_server, access_token, 
 
 async def test_streamable_http_roundtrip_is_logged_with_user(live_server, access_token, audit_file):
     headers = {"Authorization": f"Bearer {access_token}"}
-    async with streamablehttp_client(f"{live_server.url}/mcp", headers=headers) as (read, write, _):
+    async with httpx2.AsyncClient(headers=headers, trust_env=False) as http_client, \
+            streamable_http_client(f"{live_server.url}/mcp", http_client=http_client) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()

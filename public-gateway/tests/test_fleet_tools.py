@@ -4,7 +4,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from mcp.shared.memory import create_connected_server_and_client_session
+from mcp import Client
 
 import fleet_tools
 import connections
@@ -269,7 +269,7 @@ def ssh(monkeypatch, servers_file):
 
 
 async def call(name, arguments):
-    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
+    async with Client(mcp_gateway.mcp_server) as client:
         return await client.call_tool(name, arguments)
 
 
@@ -325,7 +325,7 @@ async def test_read_logs_builds_quoted_command(ssh):
 @pytestmark_anyio
 async def test_invalid_input_is_error_and_runs_nothing(ssh):
     result = await call("service_status", {"server_name": "root-box", "service": "nginx; reboot"})
-    assert result.isError
+    assert result.is_error
     assert "Invalid service name" in result.content[0].text
     assert ssh["commands"] == []
 
@@ -333,7 +333,7 @@ async def test_invalid_input_is_error_and_runs_nothing(ssh):
 @pytestmark_anyio
 async def test_schema_enum_is_enforced(ssh):
     result = await call("top_processes", {"server_name": "root-box", "sort_by": "disk"})
-    assert result.isError
+    assert result.is_error
     assert ssh["commands"] == []
 
 
@@ -418,7 +418,7 @@ async def test_destructive_tool_without_confirm_only_previews(ssh):
 @pytestmark_anyio
 async def test_destructive_preview_validates_input(ssh):
     result = await call("firewall_rule", {"server_name": "root-box", "action": "add", "port": "99999/tcp"})
-    assert result.isError
+    assert result.is_error
     assert ssh["connects"] == []
 
 
@@ -465,7 +465,7 @@ async def test_package_remove_apt(ssh):
 async def test_package_install_apt_rejects_remove_suffix(ssh):
     ssh["script"] = [("os-release", Result(0, UBUNTU_OS_RELEASE))]
     result = await call("package_install", {"server_name": "root-box", "names": ["htop", "bash-"], "confirm": True})
-    assert result.isError
+    assert result.is_error
     assert not any("apt-get" in c for c in ssh["commands"])
 
 
@@ -473,7 +473,7 @@ async def test_package_install_apt_rejects_remove_suffix(ssh):
 async def test_package_remove_apt_rejects_install_suffix(ssh):
     ssh["script"] = [("os-release", Result(0, UBUNTU_OS_RELEASE)), ("dpkg-query", Result(1, "", "no packages found"))]
     result = await call("package_remove", {"server_name": "root-box", "names": ["bash+"], "confirm": True})
-    assert result.isError
+    assert result.is_error
     assert not any("apt-get" in c for c in ssh["commands"])
 
 
@@ -573,7 +573,7 @@ async def test_unchanged_distro_is_not_rewritten(ssh, servers_file, monkeypatch)
 async def test_unsupported_distro_runs_no_package_command(ssh):
     ssh["script"] = [("os-release", Result(0, 'ID=arch\nPRETTY_NAME="Arch Linux"\n'))]
     result = await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
-    assert result.isError
+    assert result.is_error
     assert "Arch Linux" in result.content[0].text
     assert not any("install" in c for c in ssh["commands"])
     # Bilinen dağıtım kaydedilir; sonraki çağrılar yeniden sormaz
@@ -586,7 +586,7 @@ async def test_unsupported_distro_runs_no_package_command(ssh):
 async def test_undetectable_distro_is_error_and_not_stored(ssh):
     ssh["script"] = [("os-release", Result(1, "", "No such file"))]
     result = await call("package_install", {"server_name": "root-box", "names": ["htop"], "confirm": True})
-    assert result.isError
+    assert result.is_error
     assert ssh["commands"] == []
     assert "distro" not in storage.load_servers()["root-box"]
 
@@ -687,7 +687,7 @@ async def test_firewall_rule_ufw_failure_skips_status(debian):
 async def test_firewall_rule_without_firewall_is_error(debian):
     debian["tools"] = ""
     result = await call("firewall_rule", {"server_name": "deb", "action": "add", "port": "80/tcp", "confirm": True})
-    assert result.isError
+    assert result.is_error
     assert debian["commands"] == []
 
 

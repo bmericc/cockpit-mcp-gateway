@@ -3,7 +3,7 @@ import asyncio
 import json
 
 import pytest
-from mcp.shared.memory import create_connected_server_and_client_session
+from mcp import Client
 
 import cockpit_client
 import connections
@@ -139,7 +139,7 @@ def cockpit_server(url, password=PASSWORD, **extra):
 
 
 async def call(name, arguments):
-    async with create_connected_server_and_client_session(mcp_gateway.mcp_server) as client:
+    async with Client(mcp_gateway.mcp_server) as client:
         return await client.call_tool(name, arguments)
 
 

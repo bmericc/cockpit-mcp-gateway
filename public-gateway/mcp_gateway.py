@@ -6,6 +6,7 @@ from typing import Dict, Any
 from urllib.parse import urlencode
 
 import anyio
+import jsonschema
 import mcp.types as types
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
@@ -32,12 +33,9 @@ def tool_allowed(spec: fleet_tools.ToolSpec | None) -> bool:
     return not settings.READ_ONLY or (spec is not None and spec.read_only)
 
 # --- MCP Sunucu Tanımları ---
-mcp_server = Server("cockpit-mcp-gateway", version=settings.VERSION)
-
 def server_name_prop() -> dict:
     return {"server_name": {"type": "string", "description": t("Registered server name (e.g. prod-db)")}}
 
-@mcp_server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
     tools = [
         types.Tool(
@@ -97,7 +95,6 @@ async def fleet_health(servers: Dict[str, Dict[str, Any]]) -> dict:
     results = await asyncio.gather(*(one(n, servers[n]) for n in names))
     return dict(zip(names, results))
 
-@mcp_server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     """Aracı çalıştırır ve çağrıyı (kim, hangi sunucu, hangi komutlar, sonuç) işlem kaydına yazar."""
     arguments = arguments or {}
@@ -170,6 +167,34 @@ async def _call_tool(name: str, arguments: dict) -> tuple[list[types.TextContent
     except fleet_tools.ToolInputError as e:
         raise ValueError(str(e)) from e
 
+async def on_list_tools(ctx, params: types.PaginatedRequestParams | None) -> types.ListToolsResult:
+    return types.ListToolsResult(tools=await handle_list_tools())
+
+def error_result(message: str) -> types.CallToolResult:
+    return types.CallToolResult(content=[types.TextContent(type="text", text=message)], is_error=True)
+
+async def on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+    """mcp 2.x düşük seviye sunucu girdi doğrulamasını ve hata sarmalamayı artık yapmıyor; 1.x davranışı burada korunur."""
+    arguments = params.arguments or {}
+    tool = next((tool for tool in await handle_list_tools() if tool.name == params.name), None)
+    if tool is not None:
+        try:
+            jsonschema.validate(instance=arguments, schema=tool.input_schema)
+        except jsonschema.ValidationError as e:
+            return error_result(f"Input validation error: {e.message}")
+    try:
+        content = await handle_call_tool(params.name, arguments)
+    except Exception as e:
+        return error_result(str(e))
+    return types.CallToolResult(content=content, is_error=False)
+
+mcp_server = Server(
+    "cockpit-mcp-gateway",
+    version=settings.VERSION,
+    on_list_tools=on_list_tools,
+    on_call_tool=on_call_tool,
+)
+
 # --- MCP SSE Transport Entegrasyonu ---
 # Sonda "/" olmalı: aksi halde her POST /messages isteği 307 ile /messages/'e yönlenir
 sse = SseServerTransport("/messages/")
@@ -215,8 +240,19 @@ async def serve_until_unauthorized(request: Request, actor: Dict[str, Any], stre
                     tasks.cancel_scope.cancel()
                     return
 
+        # mcp 2.x araçları mesajı gönderen görevin (POST /messages/) bağlamında çalıştırır; o görevde
+        # bağlanan kullanıcı yok. Bağlamsız bir akış verilince bu görevin bağlamı (kullanıcı, IP) kullanılır.
+        relay_send, relay_receive = anyio.create_memory_object_stream(0)
+
+        async def relay():
+            async with relay_send:
+                async for message in streams[0]:
+                    await relay_send.send(message)
+
         tasks.start_soon(watch)
-        await mcp_server.run(streams[0], streams[1], mcp_server.create_initialization_options())
+        tasks.start_soon(relay)
+        async with relay_receive:
+            await mcp_server.run(relay_receive, streams[1], mcp_server.create_initialization_options())
         tasks.cancel_scope.cancel()
 
 async def handle_sse(request: Request):
