@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-18
+
 ### Added
 
 - Docker installation guide and panel feature guide with screenshots, in English and Turkish (`docs/docker-install.md`, `docs/features.md`).
@@ -17,6 +19,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Docker Hub publishing is skipped when the `DOCKERHUB_TOKEN` secret is missing; the Docker Hub user comes from the `DOCKERHUB_USERNAME` variable (repository owner by default).
 - Image builds use the GitHub Actions cache.
 - Cover and diagram images no longer show Claude.
+- The gateway runs on the `mcp` 2.x Python SDK and the `python:3.15-slim` base image; other dependencies are updated too. Tool argument validation, tool errors and the user and IP in the audit log for SSE connections work as before.
 
 ## [1.0.0] - 2026-11-01
 
@@ -34,5 +37,6 @@ First versioned release.
 - English interface with Turkish chosen from `Accept-Language`.
 - Docker images for `linux/amd64`, `linux/arm64` and `linux/arm/v7` on GHCR and Docker Hub.
 
-[Unreleased]: https://github.com/bmericc/cockpit-mcp-gateway/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/bmericc/cockpit-mcp-gateway/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/bmericc/cockpit-mcp-gateway/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/bmericc/cockpit-mcp-gateway/releases/tag/v1.0.0
