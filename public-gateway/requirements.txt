@@ -3,7 +3,7 @@ asyncssh==2.24.1
 # asyncssh needs bcrypt to open passphrase-protected OpenSSH keys
 bcrypt==5.0.0
 cryptography==50.0.2
-fastapi==0.163.1
+fastapi==0.163.2
 httpx==0.28.1
 itsdangerous==2.2.0
 mcp==2.3.0
